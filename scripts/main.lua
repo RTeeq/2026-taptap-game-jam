@@ -13,11 +13,11 @@ local UI = require("urhox-libs/UI")
 local CONFIG = {
     Title = "道友请留步",
     -- 地图
-    MapSize = 2048,
+    MapSize = 1024,
     -- 相机
     ViewRadius = 800,
     -- 玩家
-    PlayerCount = 6,
+    PlayerCount = 5,
     PlayerRadius = 20,
     MoveSpeed = 200,         -- 像素/秒
     MoveSpeedMin = 50,       -- 能量耗尽时
@@ -30,12 +30,13 @@ local CONFIG = {
     MoveCostRate = 1,            -- 正常移动消耗: 1/秒
     SprintCostRate = 3,          -- 奔跑消耗: 3/秒
     SprintSpeedMultiplier = 1.8, -- 奔跑速度倍率(200*1.8=360)
-    AttackCostEnergy = 10,       -- 攻击消耗能量
+    AttackCostEnergy = 5,        -- 攻击消耗能量
     DrinkCostEnergy = 10,        -- 喝药消耗能量(6.1)
     InteractCostEnergy = 5,      -- 交互消耗能量(6.1)
     -- 6.3 能量回复
-    EnergyStealOnHit = 35,       -- 命中掠夺能量(从对方扣除)
-    ComfortZoneRegenRate = 50,   -- 舒适区内被动回复: 50/秒(2秒回满)
+    EnergyStealOnHit = 10,       -- 命中掠夺能量(从对方扣除)
+    ComfortZoneRegenRate = 10,   -- 舒适区内被动回复: 10/秒(10秒回满,需站立不动3秒后)
+    ComfortZoneWaitTime = 3,     -- 需站立不动等待3秒才开始恢复
     ComfortZoneRadius = 150,     -- 舒适区判定半径(px)
     ComfortZoneMinSpawnDist = 300, -- 距任何玩家出生点最小距离
     ComfortZoneSeparation = 400,   -- 多个舒适区之间最小距离
@@ -69,7 +70,7 @@ local CONFIG = {
     AntidoteRatio = 0.5,         -- 黑夜降临时获得解药的存活玩家比例
     -- 9.1 毒圈
     CircleInitRadiusFactor = 0.8,  -- 初始半径=地图对角线*0.8(约2300px)
-    CircleShrinkRatio = 4/5,       -- 每轮收缩至当前4/5(缩小1/5)
+    CircleShrinkRatio = 3/5,       -- 每轮收缩至当前3/5(缩小2/5)
     CircleShrinkDuration = 1,      -- shrinking过渡阶段1秒(实际缩圈在day阶段60秒内完成)
     CirclePoisonRate = 10,         -- 9.2 毒圈外加毒速度: 10/秒
     CircleFogWidth = 50,           -- 9.3 雾霭带宽度(像素)
@@ -232,6 +233,7 @@ local function createPlayer(idx, x, y, isLocal)
         attackTimer = 0,
         attackState = "idle",    -- "idle"/"windup"/"recovery"
         attackStateTimer = 0,
+        flipDir = 1,  -- 角色朝向翻转: 1=朝右, -1=朝左
         -- AI
         aiTimer = 0,
         aiTargetX = x,
@@ -252,9 +254,16 @@ local function createPlayer(idx, x, y, isLocal)
         interactGiveType = nil,   -- 正在给予的物品类型: "antidote"/"poison"
         interactReceived = nil,   -- 收到的物品: "antidote"/"poison"
         interactFlyAnim = nil,    -- 抛物线动画 {t, duration, fromX, fromY, toX, toY, type}
+        -- 舒适区
+        comfortStandTimer = 0,  -- 在舒适区站立不动的累计时间
+        usingComfortZone = false, -- 是否正在使用舒适区(恢复中,免疫攻击)
+        usedComfortZones = {},  -- {[zoneIdx]=消耗量} 每个玩家对每个舒适区独立累计,满100不可再用
         -- 视觉
         color = {0, 0, 0},
         hitFlash = 0,
+        avatarIdx = 1,  -- 猪角色图片索引(1-5, initPlayers中随机分配)
+        -- 毒满暴走buff: 毒素达到100时激活, 毒素归零时解除
+        poisonMaxBuff = false,  -- 是否处于暴走状态(毒素转移翻倍+吸取能量翻倍)
         -- 10.3 中毒加深骷髅
         poisonSkullTimer = 0,
         lastPoisonTick = 0,  -- 上次触发骷髅时的毒值(每+10触发)
@@ -268,8 +277,19 @@ local PLAYER_COLORS = {
     {120, 125, 130},  -- 冷灰
     {150, 140, 120},  -- 暖灰
     {130, 120, 135},  -- 灰紫
-    {115, 130, 120},  -- 灰绿
 }
+
+-- 猪角色图片路径(5个角色)
+local PIG_IMAGE_PATHS = {
+    "image/Image 16.png",        -- 小丑猪
+    "image/Image 13 (4).png",    -- 部落战士猪
+    "image/Image 11 (6).png",    -- 疯狂科学家猪
+    "image/Image 12 (4).png",    -- 矿工猪
+    "image/Image 11 (5).png",    -- 盗贼猪
+}
+local pigImages = {}  -- nvgCreateImage 返回的句柄数组
+local GHOST_IMAGE_PATH = "image/Image 17.png"
+local ghostImage = nil  -- 鬼魂图片句柄
 
 local function initPlayers()
     players = {}
@@ -277,12 +297,23 @@ local function initPlayers()
     local cy = CONFIG.MapSize / 2
     local spawnRadius = CONFIG.MapSize * 0.35
 
+    -- 随机打乱角色图片分配(Fisher-Yates shuffle)
+    local avatarOrder = {}
+    for i = 1, CONFIG.PlayerCount do
+        avatarOrder[i] = i
+    end
+    for i = CONFIG.PlayerCount, 2, -1 do
+        local j = math.random(1, i)
+        avatarOrder[i], avatarOrder[j] = avatarOrder[j], avatarOrder[i]
+    end
+
     for i = 1, CONFIG.PlayerCount do
         local angle = (i - 1) * (2 * math.pi / CONFIG.PlayerCount) - math.pi / 2
         local px = cx + math.cos(angle) * spawnRadius
         local py = cy + math.sin(angle) * spawnRadius
         local p = createPlayer(i, px, py, i == localPlayerIdx)
         p.color = PLAYER_COLORS[i]
+        p.avatarIdx = avatarOrder[i]  -- 随机分配猪角色图片
         players[i] = p
     end
 end
@@ -456,17 +487,23 @@ local function enterSettleElimination()
 
     playSound("sfx_settle_kill", 0.7)
 
-    -- 所有 poison > 0 的存活玩家死亡
+    -- 淘汰毒素最高的玩家（仅淘汰一人）
+    local maxPoison = 0
+    local maxIdx = nil
     for i = 1, #players do
-        if players[i].alive and players[i].poison > 0 then
-            players[i].alive = false
-            players[i].isGhost = true
-            players[i].vx = 0
-            players[i].vy = 0
-            table.insert(settleDeaths, i)
-            spawnDeathEffect(i)
-            print("玩家 " .. i .. " 毒素(" .. math.floor(players[i].poison) .. ")>0, 死亡!")
+        if players[i].alive and players[i].poison > maxPoison then
+            maxPoison = players[i].poison
+            maxIdx = i
         end
+    end
+    if maxIdx then
+        players[maxIdx].alive = false
+        players[maxIdx].isGhost = true
+        players[maxIdx].vx = 0
+        players[maxIdx].vy = 0
+        table.insert(settleDeaths, maxIdx)
+        spawnDeathEffect(maxIdx)
+        print("玩家 " .. maxIdx .. " 毒素最高(" .. math.floor(players[maxIdx].poison) .. "), 被淘汰!")
     end
 
     -- 存活者提示"存活"
@@ -555,6 +592,9 @@ local function generateComfortZones(cx, cy, safeRadius)
                 x = zx, y = zy,
                 type = zoneTypes[math.random(1, 3)],
                 playersInside = {},
+                zoneEnergy = 100,     -- 舒适区能量(最大100)
+                zoneCooldown = 0,     -- 冷却倒计时(秒)
+                zoneUsesLeft = 5,     -- 剩余可用次数
             })
             placed = true
             break
@@ -570,6 +610,9 @@ local function generateComfortZones(cx, cy, safeRadius)
                 y = cy + math.sin(angle) * r,
                 type = zoneTypes[math.random(1, 3)],
                 playersInside = {},
+                zoneEnergy = 100,
+                zoneCooldown = 0,
+                zoneUsesLeft = 5,
             })
         end
     end
@@ -593,15 +636,26 @@ local function enterShrinking()
         end
     end
 
-    -- 在新安全区内补充新舒适区(确保总有可用的)
+    -- 在新安全区内补充新舒适区
+    -- 第5轮及以后不刷新舒适区; 第4轮只刷1个; 其他轮补到3个
+    local maxZonesThisRound = 3
+    if currentRound >= 5 then
+        maxZonesThisRound = 0
+    elseif currentRound == 4 then
+        maxZonesThisRound = 1
+    end
+
+    -- 每轮初始使用次数递减: 第1轮5次, 第2轮4次, 第3轮3次, 第4轮2次, 第5轮1次
+    local roundUses = math.max(1, 6 - currentRound)
+
     local activeCount = 0
     for _, zone in ipairs(comfortZones) do
         if not zone.corrupted then activeCount = activeCount + 1 end
     end
-    -- 如果可用舒适区不足3个, 补充生成
-    if activeCount < 3 then
+    -- 补充舒适区到目标数量
+    if maxZonesThisRound > 0 and activeCount < maxZonesThisRound then
         comfortFloats = {}
-        local needed = 3 - activeCount
+        local needed = maxZonesThisRound - activeCount
         for _ = 1, needed do
             local placed = false
             for attempt = 1, 50 do
@@ -624,6 +678,9 @@ local function enterShrinking()
                         type = zoneTypes[math.random(1, 3)],
                         playersInside = {},
                         corrupted = false,
+                        zoneEnergy = 100,
+                        zoneCooldown = 0,
+                        zoneUsesLeft = roundUses,
                     })
                     placed = true
                     break
@@ -640,6 +697,9 @@ local function enterShrinking()
                     type = zoneTypes[math.random(1, 3)],
                     playersInside = {},
                     corrupted = false,
+                    zoneEnergy = 100,
+                    zoneCooldown = 0,
+                    zoneUsesLeft = roundUses,
                 })
             end
         end
@@ -663,17 +723,22 @@ local function resolveAttackHit(attacker)
 
     for i = 1, #players do
         local target = players[i]
-        if target.idx ~= attacker.idx and target.alive then
+        if target.idx ~= attacker.idx and target.alive and not target.usingComfortZone then
             local d = dist(attacker.x, attacker.y, target.x, target.y)
             if d <= CONFIG.AttackRange then
                 local angleToTarget = angleBetween(attacker.x, attacker.y, target.x, target.y)
                 local angleDiff = normalizeAngle(angleToTarget - attacker.facing)
                 if math.abs(angleDiff) <= halfAngle then
                     -- 命中! 4.3: 自身-15毒, 目标+10毒
-                    -- 6.3: 掠夺目标能量(最多35, 不超过目标剩余)
+                    -- 毒满暴走buff: 毒素转移和能量掠夺翻倍
+                    local buffMult = attacker.poisonMaxBuff and 2 or 1
+                    local poisonAdd = CONFIG.AttackPoisonAdd * buffMult
+                    local energySteal = CONFIG.EnergyStealOnHit * buffMult
+
+                    -- 6.3: 掠夺目标能量(不超过目标剩余)
                     attacker.poison = clamp(attacker.poison - CONFIG.AttackPoisonReduce, CONFIG.PoisonMin, CONFIG.PoisonMax)
-                    target.poison = clamp(target.poison + CONFIG.AttackPoisonAdd, CONFIG.PoisonMin, CONFIG.PoisonMax)
-                    local stealAmount = math.min(CONFIG.EnergyStealOnHit, target.energy)
+                    target.poison = clamp(target.poison + poisonAdd, CONFIG.PoisonMin, CONFIG.PoisonMax)
+                    local stealAmount = math.min(energySteal, target.energy)
                     target.energy = clamp(target.energy - stealAmount, CONFIG.EnergyMin, CONFIG.EnergyMax)
                     attacker.energy = clamp(attacker.energy + stealAmount, CONFIG.EnergyMin, CONFIG.EnergyMax)
                     target.hitFlash = 0.3
@@ -690,10 +755,12 @@ local function resolveAttackHit(attacker)
                     table.insert(statusEffects, { playerIdx = target.idx, type = "poison", timer = 1.0 })
                     table.insert(statusEffects, { playerIdx = attacker.idx, type = "detox", timer = 0.8 })
 
-                    -- 4.3 浮动文字: 目标"+10毒"(红), 攻击者"-15毒"(绿)
+                    -- 4.3 浮动文字: 显示实际数值(暴走时翻倍)
+                    local poisonText = "+" .. poisonAdd .. "毒"
+                    if attacker.poisonMaxBuff then poisonText = poisonText .. "(暴走!)" end
                     table.insert(floatingTexts, {
                         x = target.x, y = target.y - 30,
-                        text = "+10毒", color = {220, 50, 50},
+                        text = poisonText, color = {220, 50, 50},
                         timer = 1.0, maxTimer = 1.0,
                     })
                     table.insert(floatingTexts, {
@@ -1285,6 +1352,9 @@ end
 -- AI 逻辑
 -- ============================================================================
 
+-- AI全局: 正在喝解药的玩家列表(所有AI共享优先攻击目标)
+local aiPriorityTargets = {}  -- {playerIdx = true}
+
 local function updateAI(p, dt)
     if p.isLocal or not p.alive then return end
 
@@ -1353,9 +1423,9 @@ local function updateAI(p, dt)
         return
     end
 
-    -- 5.2 AI喝药决策: 有解药且毒素>30时考虑喝
-    if p.potionState == "antidote" and p.poison > 30 and gamePhase == "day" then
-        -- 附近没有敌人时才喝(安全距离100px)
+    -- 5.2 AI喝药决策: 有解药且有毒素时考虑喝
+    if p.potionState == "antidote" and p.poison >= 20 and gamePhase == "day" then
+        -- 附近没有敌人时才喝(安全距离)
         local nearestEnemyDist = math.huge
         for i = 1, #players do
             if players[i].alive and players[i].idx ~= p.idx then
@@ -1363,7 +1433,11 @@ local function updateAI(p, dt)
                 if d < nearestEnemyDist then nearestEnemyDist = d end
             end
         end
-        if nearestEnemyDist > 100 and math.random() < 0.02 then
+        -- 毒素越高越急切喝药, 安全距离随毒素降低
+        local urgency = p.poison / CONFIG.PoisonMax  -- 0~1
+        local safeDist = 150 * (1 - urgency * 0.7)  -- 毒素高时安全距离降低
+        local drinkChance = 0.02 + urgency * 0.08   -- 毒素高时概率提高(2%~10%)
+        if nearestEnemyDist > safeDist and math.random() < drinkChance then
             startDrinking(p, "antidote")
             return
         end
@@ -1395,14 +1469,45 @@ local function updateAI(p, dt)
             p.vx = (dx / d) * CONFIG.MoveSpeed
             p.vy = (dy / d) * CONFIG.MoveSpeed
             p.facing = math.atan(dy, dx)
+            -- AI翻转方向跟随移动
+            if p.vx > 0.1 then p.flipDir = 1 elseif p.vx < -0.1 then p.flipDir = -1 end
         else
             p.vx = 0
             p.vy = 0
         end
 
-        -- 尝试攻击
-        if p.aiWantsAttack then
-            performAttack(p)
+        -- 实时检测攻击：好战AI，随时攻击范围内目标
+        if p.attackState == "idle" and p.attackCooldown <= 0 and p.energy >= CONFIG.AttackCostEnergy then
+            -- 优先攻击正在喝解药的玩家(最高优先级)
+            local priorityTarget = nil
+            local priorityDist = math.huge
+            for i = 1, #players do
+                local other = players[i]
+                if other.alive and other.idx ~= p.idx and aiPriorityTargets[other.idx] then
+                    local dToOther = dist(p.x, p.y, other.x, other.y)
+                    if dToOther <= CONFIG.AttackRange and dToOther < priorityDist then
+                        priorityTarget = other
+                        priorityDist = dToOther
+                    end
+                end
+            end
+            if priorityTarget then
+                p.facing = angleBetween(p.x, p.y, priorityTarget.x, priorityTarget.y)
+                performAttack(p)
+            else
+                -- 普通攻击: 范围内任何目标
+                for i = 1, #players do
+                    local other = players[i]
+                    if other.alive and other.idx ~= p.idx then
+                        local dToOther = dist(p.x, p.y, other.x, other.y)
+                        if dToOther <= CONFIG.AttackRange then
+                            p.facing = angleBetween(p.x, p.y, other.x, other.y)
+                            performAttack(p)
+                            break
+                        end
+                    end
+                end
+            end
         end
         return
     end
@@ -1410,41 +1515,184 @@ local function updateAI(p, dt)
     -- 重新决策
     p.aiTimer = CONFIG.AIUpdateInterval + math.random() * 0.2
 
-    -- 找最近的活着的其他玩家
-    local nearestDist = math.huge
-    local nearestTarget = nil
+    -- ========== 好战AI目标选择(优先级从高到低) ==========
+    -- 优先级1: 正在喝解药的玩家(最高优先攻击)
+    -- 优先级2: 毒素低+能量高的玩家(肥羊目标)
+    -- 优先级3: 最近的敌人
+
+    -- 更新优先攻击列表: 正在喝解药的玩家
+    aiPriorityTargets = {}
     for i = 1, #players do
-        if players[i].alive and players[i].idx ~= p.idx then
-            local d = dist(p.x, p.y, players[i].x, players[i].y)
-            if d < nearestDist then
-                nearestDist = d
-                nearestTarget = players[i]
+        local other = players[i]
+        if other.alive and other.idx ~= p.idx then
+            if other.drinkingState == "drinking" and other.drinkingType == "antidote" then
+                aiPriorityTargets[other.idx] = true
             end
         end
     end
 
-    if nearestTarget then
-        if p.poison > 20 and p.energy > 30 then
-            -- 有毒且有能量 → 追击
-            p.aiTargetX = nearestTarget.x + (math.random() - 0.5) * 50
-            p.aiTargetY = nearestTarget.y + (math.random() - 0.5) * 50
-            p.aiWantsAttack = nearestDist < CONFIG.AttackRange * 1.2
-        elseif p.poison <= 0 then
-            -- 无毒 → 逃跑
-            local awayAngle = angleBetween(nearestTarget.x, nearestTarget.y, p.x, p.y)
-            p.aiTargetX = p.x + math.cos(awayAngle) * 200
-            p.aiTargetY = p.y + math.sin(awayAngle) * 200
+    -- 检查是否有优先攻击目标(正在喝解药的)
+    local bestPriorityTarget = nil
+    local bestPriorityDist = math.huge
+    for i = 1, #players do
+        local other = players[i]
+        if other.alive and other.idx ~= p.idx and aiPriorityTargets[other.idx] then
+            local d = dist(p.x, p.y, other.x, other.y)
+            if d < bestPriorityDist then
+                bestPriorityDist = d
+                bestPriorityTarget = other
+            end
+        end
+    end
+
+    -- 如果有玩家正在喝解药,全力追击!
+    if bestPriorityTarget then
+        p.aiTargetX = bestPriorityTarget.x + (math.random() - 0.5) * 15
+        p.aiTargetY = bestPriorityTarget.y + (math.random() - 0.5) * 15
+        p.aiWantsAttack = true
+        p.sprinting = p.energy > 20  -- 冲刺追击
+        -- 保持在毒圈内
+        local dToCenter = dist(p.aiTargetX, p.aiTargetY, circle.cx, circle.cy)
+        if dToCenter > circle.radius * 0.8 then
+            p.aiTargetX = lerp(p.aiTargetX, circle.cx, 0.5)
+            p.aiTargetY = lerp(p.aiTargetY, circle.cy, 0.5)
+        end
+        return
+    end
+
+    -- 找最近的未腐败舒适区(AI也受舒适区使用限制)
+    local nearestZoneDist = math.huge
+    local nearestZone = nil
+    for zi, zone in ipairs(comfortZones) do
+        if not zone.corrupted then
+            -- 检查AI是否已使用过该舒适区
+            local usedByMe = false
+            if p.usedComfortZones then
+                for _, usedZi in ipairs(p.usedComfortZones) do
+                    if usedZi == zi then usedByMe = true; break end
+                end
+            end
+            if not usedByMe then
+                local d = dist(p.x, p.y, zone.x, zone.y)
+                if d < nearestZoneDist then
+                    nearestZoneDist = d
+                    nearestZone = zone
+                end
+            end
+        end
+    end
+
+    -- 能量极低时才去舒适区(好战优先,能量<20才考虑恢复)
+    if p.energy < 20 and nearestZone then
+        -- 已在舒适区内 → 停下来恢复(但时间缩短,恢复一点就走)
+        if nearestZoneDist <= CONFIG.ComfortZoneRadius * 0.5 then
+            p.aiTargetX = p.x
+            p.aiTargetY = p.y
             p.aiWantsAttack = false
+            p.aiTimer = 2.0 + math.random() * 2.0  -- 只停留2~4秒就重新追击
+            return
         else
-            -- 随机游走+接近
-            p.aiTargetX = p.x + (math.random() - 0.5) * 300
-            p.aiTargetY = p.y + (math.random() - 0.5) * 300
-            p.aiWantsAttack = nearestDist < CONFIG.AttackRange
+            -- 前往最近舒适区
+            p.aiTargetX = nearestZone.x + (math.random() - 0.5) * 20
+            p.aiTargetY = nearestZone.y + (math.random() - 0.5) * 20
+            p.aiWantsAttack = false
+            return
+        end
+    end
+
+    -- ========== AI毒素为0时逃跑(保命优先) ==========
+    if p.poison <= 0 then
+        -- 找离自己最近的敌人,反方向逃跑
+        local nearestEnemy = nil
+        local nearestDist = math.huge
+        for i = 1, #players do
+            local other = players[i]
+            if other.alive and other.idx ~= p.idx then
+                local d = dist(p.x, p.y, other.x, other.y)
+                if d < nearestDist then
+                    nearestDist = d
+                    nearestEnemy = other
+                end
+            end
+        end
+        if nearestEnemy and nearestDist < 200 then
+            -- 远离最近敌人
+            local fleeAngle = math.atan(p.y - nearestEnemy.y, p.x - nearestEnemy.x)
+            p.aiTargetX = p.x + math.cos(fleeAngle) * 200
+            p.aiTargetY = p.y + math.sin(fleeAngle) * 200
+            p.sprinting = p.energy > 15  -- 逃跑时冲刺
+        else
+            -- 没有近处敌人,随机游走保持距离
+            p.aiTargetX = p.x + (math.random() - 0.5) * 250
+            p.aiTargetY = p.y + (math.random() - 0.5) * 250
+            p.sprinting = false
+        end
+        p.aiWantsAttack = false
+        -- 保持在毒圈内
+        local dToCenter = dist(p.aiTargetX, p.aiTargetY, circle.cx, circle.cy)
+        if dToCenter > circle.radius * 0.8 then
+            p.aiTargetX = lerp(p.aiTargetX, circle.cx, 0.5)
+            p.aiTargetY = lerp(p.aiTargetY, circle.cy, 0.5)
+        end
+        return
+    end
+
+    -- ========== 好战目标选择(优先级: 喝解药>0毒药>满能量>好状态) ==========
+    local bestTarget = nil
+    local bestScore = -math.huge
+    for i = 1, #players do
+        local other = players[i]
+        if other.alive and other.idx ~= p.idx and not other.usingComfortZone then
+            local d = dist(p.x, p.y, other.x, other.y)
+            local score = -d * 0.1  -- 基础: 距离近优先
+
+            -- 优先级1(最高): 正在喝解药 +500
+            if other.drinkingState == "drinking" and other.drinkingType == "antidote" then
+                score = score + 500
+            end
+            -- 优先级2: 0毒素的玩家 +300 (打他加毒效果最好)
+            if other.poison <= 0 then
+                score = score + 300
+            end
+            -- 优先级3: 满能量的玩家 +150 (掠夺价值高)
+            if other.energy >= CONFIG.EnergyMax then
+                score = score + 150
+            end
+            -- 优先级4: 好状态(低毒+高能) +50~100
+            local goodState = (CONFIG.PoisonMax - other.poison) / CONFIG.PoisonMax * 50
+                            + (other.energy / CONFIG.EnergyMax) * 50
+            score = score + goodState
+
+            if score > bestScore then
+                bestScore = score
+                bestTarget = other
+            end
+        end
+    end
+
+    if bestTarget then
+        local d = dist(p.x, p.y, bestTarget.x, bestTarget.y)
+        -- 好战AI: 主动追击
+        if p.energy >= CONFIG.AttackCostEnergy then
+            p.aiTargetX = bestTarget.x + (math.random() - 0.5) * 20
+            p.aiTargetY = bestTarget.y + (math.random() - 0.5) * 20
+            p.aiWantsAttack = d < CONFIG.AttackRange * 1.5
+            -- 目标较远时开启冲刺
+            if d > CONFIG.AttackRange * 2 and p.energy > 30 then
+                p.sprinting = true
+            else
+                p.sprinting = false
+            end
+        else
+            -- 能量不足时短暂游走
+            p.aiTargetX = p.x + (math.random() - 0.5) * 150
+            p.aiTargetY = p.y + (math.random() - 0.5) * 150
+            p.aiWantsAttack = false
         end
     else
-        -- 没有目标，随机移动
-        p.aiTargetX = CONFIG.MapSize / 2 + (math.random() - 0.5) * 400
-        p.aiTargetY = CONFIG.MapSize / 2 + (math.random() - 0.5) * 400
+        -- 没有目标，向地图中心移动
+        p.aiTargetX = CONFIG.MapSize / 2 + (math.random() - 0.5) * 200
+        p.aiTargetY = CONFIG.MapSize / 2 + (math.random() - 0.5) * 200
         p.aiWantsAttack = false
     end
 
@@ -1514,31 +1762,138 @@ local function updatePlayers(dt)
             p.inPoisonZone = false
         end
 
-        -- 7.2 舒适区能量回复(5/秒, 上限100) - 9.4 失效区不回复
+        -- 7.2 舒适区能量回复(10/秒, 10秒回满, 需站立不动3秒后) - 9.4 失效区不回复
+        -- 新增: 舒适区有自身能量条(100), 消耗完进入5秒冷却, 每个舒适区只能用5次
+        -- 新增: 玩家使用过的舒适区不能再次使用(usedComfortZones记录)
         local wasInComfort = p.inComfortZone
         p.inComfortZone = false
-        for _, zone in ipairs(comfortZones) do
-            if not zone.corrupted and dist(p.x, p.y, zone.x, zone.y) <= CONFIG.ComfortZoneRadius then
-                p.inComfortZone = true
-                if not wasInComfort and p.isLocal then playSound("sfx_comfort_zone_enter", 0.4) end
-                if p.energy < CONFIG.EnergyMax then
-                    local prevEnergy = p.energy
-                    p.energy = clamp(p.energy + CONFIG.ComfortZoneRegenRate * dt, CONFIG.EnergyMin, CONFIG.EnergyMax)
-                    -- 浮动+5数字(每积累5点触发一次)
-                    local prevTick = math.floor(prevEnergy / 5)
-                    local curTick = math.floor(p.energy / 5)
-                    if curTick > prevTick then
-                        table.insert(comfortFloats, {
-                            x = p.x + (math.random() - 0.5) * 10,
-                            y = p.y - 40,
-                            text = "+5",
-                            life = 1.0,
-                            maxLife = 1.0,
-                            color = {80, 200, 80},
+        if p.usedZoneHintCD and p.usedZoneHintCD > 0 then p.usedZoneHintCD = p.usedZoneHintCD - dt end
+        local isStanding = (p.vx == 0 and p.vy == 0)  -- 必须站着不动
+        for zi, zone in ipairs(comfortZones) do
+            -- 跳过腐败/耗尽/冷却中的舒适区
+            local zoneAvailable = not zone.corrupted
+                and (zone.zoneUsesLeft or 5) > 0
+                and (zone.zoneCooldown or 0) <= 0
+                and (zone.zoneEnergy or 100) > 0
+            if not zoneAvailable then goto nextZone end
+
+            -- 检查该玩家是否已消耗完此舒适区的一个点数(累计>=100)
+            local consumed = (p.usedComfortZones and p.usedComfortZones[zi]) or 0
+            if consumed >= 100 then
+                -- 本地玩家进入已用完的舒适区时给出提示(每3秒最多一次)
+                if p.isLocal and dist(p.x, p.y, zone.x, zone.y) <= CONFIG.ComfortZoneRadius then
+                    if not p.usedZoneHintCD or p.usedZoneHintCD <= 0 then
+                        p.usedZoneHintCD = 3.0
+                        table.insert(floatingTexts, {
+                            x = p.x, y = p.y - 40,
+                            text = "此舒适区已用完,请前往其他舒适区",
+                            color = {200, 150, 80},
+                            timer = 1.5, maxTimer = 1.5,
                         })
                     end
                 end
+                goto nextZone
+            end
+
+            if dist(p.x, p.y, zone.x, zone.y) <= CONFIG.ComfortZoneRadius then
+                -- 舒适区独占: 如果已被其他玩家占用,本玩家不能使用
+                if zone.occupiedBy and zone.occupiedBy ~= p.idx then
+                    if p.isLocal then
+                        if not p.usedZoneHintCD or p.usedZoneHintCD <= 0 then
+                            p.usedZoneHintCD = 3.0
+                            table.insert(floatingTexts, {
+                                x = p.x, y = p.y - 40,
+                                text = "舒适区被占用中",
+                                color = {200, 150, 80},
+                                timer = 1.2, maxTimer = 1.2,
+                            })
+                        end
+                    end
+                    goto nextZone
+                end
+                p.inComfortZone = true
+                if not wasInComfort and p.isLocal then playSound("sfx_comfort_zone_enter", 0.4) end
+                if isStanding then
+                    -- 累计站立时间，达到3秒后才开始恢复
+                    p.comfortStandTimer = p.comfortStandTimer + dt
+                    -- 站满等待时间后标记占用
+                    if p.comfortStandTimer >= CONFIG.ComfortZoneWaitTime then
+                        zone.occupiedBy = p.idx
+                        p.usingComfortZone = true
+                    end
+                    if p.comfortStandTimer >= CONFIG.ComfortZoneWaitTime and p.energy < CONFIG.EnergyMax then
+                        -- 消耗舒适区能量来恢复玩家能量
+                        local regenAmount = CONFIG.ComfortZoneRegenRate * dt
+                        local zoneConsume = regenAmount  -- 舒适区消耗与恢复量1:1
+                        zoneConsume = math.min(zoneConsume, zone.zoneEnergy)
+                        -- 限制不超过该玩家对此舒适区的剩余配额(每人最多消耗100)
+                        local curConsumed = (p.usedComfortZones and p.usedComfortZones[zi]) or 0
+                        local remaining = 100 - curConsumed
+                        zoneConsume = math.min(zoneConsume, remaining)
+                        regenAmount = math.min(regenAmount, zoneConsume)
+
+                        local prevEnergy = p.energy
+                        p.energy = clamp(p.energy + regenAmount, CONFIG.EnergyMin, CONFIG.EnergyMax)
+                        zone.zoneEnergy = zone.zoneEnergy - zoneConsume
+
+                        -- 累计该玩家对此舒适区的消耗量(每个玩家独立)
+                        if not p.usedComfortZones then p.usedComfortZones = {} end
+                        p.usedComfortZones[zi] = (p.usedComfortZones[zi] or 0) + zoneConsume
+                        -- 消耗满100 → 该玩家不能再用此舒适区
+                        if p.usedComfortZones[zi] >= 100 then
+                            p.usedComfortZones[zi] = 100
+                            if p.isLocal then
+                                table.insert(floatingTexts, {
+                                    x = p.x, y = p.y - 50,
+                                    text = "此舒适区点数已用完!",
+                                    color = {255, 200, 100},
+                                    timer = 1.5, maxTimer = 1.5,
+                                })
+                            end
+                        end
+
+                        -- 舒适区能量耗尽 → 进入5秒冷却
+                        if zone.zoneEnergy <= 0 then
+                            zone.zoneEnergy = 0
+                            zone.zoneCooldown = 5.0
+                            zone.zoneUsesLeft = zone.zoneUsesLeft - 1
+                        end
+
+                        -- 浮动+5数字(每积累5点触发一次)
+                        local prevTick = math.floor(prevEnergy / 5)
+                        local curTick = math.floor(p.energy / 5)
+                        if curTick > prevTick then
+                            table.insert(comfortFloats, {
+                                x = p.x + (math.random() - 0.5) * 10,
+                                y = p.y - 40,
+                                text = "+5",
+                                life = 1.0,
+                                maxLife = 1.0,
+                                color = {80, 200, 80},
+                            })
+                        end
+                    end
+                else
+                    -- 移动了，重置等待计时并释放占用
+                    if p.usingComfortZone then
+                        zone.occupiedBy = nil
+                        p.usingComfortZone = false
+                    end
+                    p.comfortStandTimer = 0
+                end
                 break
+            end
+            ::nextZone::
+        end
+        -- 不在舒适区时重置计时并释放占用
+        if not p.inComfortZone then
+            p.comfortStandTimer = 0
+            if p.usingComfortZone then
+                -- 释放之前占用的舒适区
+                for _, z in ipairs(comfortZones) do
+                    if z.occupiedBy == p.idx then z.occupiedBy = nil end
+                end
+                p.usingComfortZone = false
             end
         end
 
@@ -1559,15 +1914,33 @@ local function updatePlayers(dt)
         end
         p.lastPoisonTick = curTick10
 
-        -- 4.2 即时死亡: 毒药值达到100立即死亡, 不等待结算
-        if p.poison >= CONFIG.PoisonMax and p.alive then
-            p.alive = false
-            p.isGhost = true
-            p.vx = 0
-            p.vy = 0
-            p.attackState = "idle"
-            spawnDeathEffect(i)
-            print("玩家 " .. i .. " 毒发身亡(即时死亡)! 变为鬼魂观战")
+        -- 4.2 毒素上限钳制（不再即时死亡，统一由结算阶段淘汰）
+        if p.poison > CONFIG.PoisonMax then
+            p.poison = CONFIG.PoisonMax
+        end
+
+        -- 4.3 毒满暴走buff检测
+        if p.poison >= CONFIG.PoisonMax then
+            if not p.poisonMaxBuff then
+                p.poisonMaxBuff = true
+                table.insert(floatingTexts, {
+                    x = p.x, y = p.y - 60,
+                    text = "毒满暴走! 攻击翻倍!",
+                    color = {255, 0, 180},
+                    timer = 2.0, maxTimer = 2.0,
+                })
+                if p.isLocal then playSound("sfx_poison_transfer", 0.8) end
+            end
+        elseif p.poison <= CONFIG.PoisonMin then
+            if p.poisonMaxBuff then
+                p.poisonMaxBuff = false
+                table.insert(floatingTexts, {
+                    x = p.x, y = p.y - 60,
+                    text = "暴走结束",
+                    color = {150, 150, 150},
+                    timer = 1.5, maxTimer = 1.5,
+                })
+            end
         end
 
         ::continue::
@@ -1685,6 +2058,29 @@ local isTouchDevice = false  -- 检测到触摸输入后自动开启
 
 local moveInput = { x = 0, y = 0 }
 
+-- ============================================================================
+-- 手柄适配
+-- ============================================================================
+local GAMEPAD_DEADZONE = 0.2  -- 摇杆死区
+
+local function applyDeadzone(value)
+    if math.abs(value) < GAMEPAD_DEADZONE then return 0 end
+    -- 平滑映射: 死区外的值归一化到 0~1
+    local sign = value > 0 and 1 or -1
+    return sign * (math.abs(value) - GAMEPAD_DEADZONE) / (1.0 - GAMEPAD_DEADZONE)
+end
+
+--- 获取当前连接的手柄(优先返回第一个 Controller 类型)
+local function getGamepad()
+    for i = 0, input.numJoysticks - 1 do
+        local js = input:GetJoystickByIndex(i)
+        if js and js:IsController() then
+            return js
+        end
+    end
+    return nil
+end
+
 local function handlePlayerInput(dt)
     local p = players[localPlayerIdx]
     if not p then return end
@@ -1705,8 +2101,15 @@ local function handlePlayerInput(dt)
         return
     end
 
-    -- 6.1 奔跑: 按住Shift键 或 触控奔跑键 + 有能量时奔跑
-    if input:GetKeyDown(KEY_LSHIFT) or input:GetKeyDown(KEY_RSHIFT) or touchButtons.sprint.pressed then
+    -- 获取手柄(每帧检测)
+    local gamepad = getGamepad()
+
+    -- 6.1 奔跑: 按住Shift键 或 触控奔跑键 或 手柄LB + 有能量时奔跑
+    local sprintPressed = input:GetKeyDown(KEY_LSHIFT) or input:GetKeyDown(KEY_RSHIFT) or touchButtons.sprint.pressed
+    if not sprintPressed and gamepad then
+        sprintPressed = gamepad:GetButtonDown(CONTROLLER_BUTTON_LEFTSHOULDER)
+    end
+    if sprintPressed then
         if p.energy > 0 then
             p.sprinting = true
         else
@@ -1724,6 +2127,16 @@ local function handlePlayerInput(dt)
     if input:GetKeyDown(KEY_A) then moveInput.x = -1 end
     if input:GetKeyDown(KEY_D) then moveInput.x = 1 end
 
+    -- 手柄左摇杆移动输入合并
+    if gamepad then
+        local gpX = applyDeadzone(gamepad:GetAxisPosition(CONTROLLER_AXIS_LEFTX))
+        local gpY = applyDeadzone(gamepad:GetAxisPosition(CONTROLLER_AXIS_LEFTY))
+        if gpX ~= 0 or gpY ~= 0 then
+            moveInput.x = gpX
+            moveInput.y = gpY
+        end
+    end
+
     -- 触控摇杆输入合并
     if touchJoystick.active then
         local jLen = math.sqrt(touchJoystick.dx * touchJoystick.dx + touchJoystick.dy * touchJoystick.dy)
@@ -1731,6 +2144,13 @@ local function handlePlayerInput(dt)
             moveInput.x = touchJoystick.dx / touchJoystick.radius
             moveInput.y = touchJoystick.dy / touchJoystick.radius
         end
+    end
+
+    -- 根据移动输入更新角色翻转方向(PC用AD键, 触控/手柄用moveInput.x)
+    if moveInput.x > 0.1 then
+        p.flipDir = 1   -- 朝右
+    elseif moveInput.x < -0.1 then
+        p.flipDir = -1  -- 朝左
     end
 
     -- 没有移动输入时停止奔跑
@@ -1746,11 +2166,13 @@ local function handlePlayerInput(dt)
             speed = speed * 1.3  -- 鬼魂移动稍快
         elseif p.sprinting then
             speed = CONFIG.MoveSpeed * CONFIG.SprintSpeedMultiplier
-            -- 6.1 奔跑消耗能量
-            p.energy = clamp(p.energy - CONFIG.SprintCostRate * dt, CONFIG.EnergyMin, CONFIG.EnergyMax)
-            if p.energy <= 0 then
-                p.sprinting = false
-                speed = CONFIG.MoveSpeed
+            -- 6.1 奔跑消耗能量(准备阶段不消耗)
+            if gamePhase ~= "prepare" then
+                p.energy = clamp(p.energy - CONFIG.SprintCostRate * dt, CONFIG.EnergyMin, CONFIG.EnergyMax)
+                if p.energy <= 0 then
+                    p.sprinting = false
+                    speed = CONFIG.MoveSpeed
+                end
             end
         end
         p.vx = (moveInput.x / len) * speed
@@ -1763,23 +2185,65 @@ local function handlePlayerInput(dt)
     -- 鬼魂不能朝向/攻击, 只做移动
     if p.isGhost then return end
 
-    -- 鼠标朝向(屏幕坐标转世界坐标)
-    local graphics = GetGraphics()
-    local screenW = graphics:GetWidth()
-    local screenH = graphics:GetHeight()
-    local dpr = graphics:GetDPR()
-    local logW = screenW / dpr
-    local logH = screenH / dpr
+    -- 朝向控制: 优先右摇杆 > 鼠标 > 左摇杆方向
+    local facingSet = false
 
-    local mousePos = input:GetMousePosition()
-    local mx = mousePos.x / dpr
-    local my = mousePos.y / dpr
+    -- 手柄右摇杆控制朝向(优先级最高)
+    if gamepad then
+        local rx = applyDeadzone(gamepad:GetAxisPosition(CONTROLLER_AXIS_RIGHTX))
+        local ry = applyDeadzone(gamepad:GetAxisPosition(CONTROLLER_AXIS_RIGHTY))
+        if rx ~= 0 or ry ~= 0 then
+            p.facing = math.atan(ry, rx)
+            facingSet = true
+        end
+    end
 
-    -- 屏幕中心到鼠标的方向 = 玩家朝向
-    local dx = mx - logW / 2
-    local dy = my - logH / 2
-    if dx ~= 0 or dy ~= 0 then
-        p.facing = math.atan(dy, dx)
+    -- 鼠标朝向(屏幕坐标转世界坐标) - 触控设备跳过,用移动方向控制攻击朝向
+    if not facingSet and not isTouchDevice then
+        local graphics = GetGraphics()
+        local screenW = graphics:GetWidth()
+        local screenH = graphics:GetHeight()
+        local dpr = graphics:GetDPR()
+        local logW = screenW / dpr
+        local logH = screenH / dpr
+
+        local mousePos = input:GetMousePosition()
+        local mx = mousePos.x / dpr
+        local my = mousePos.y / dpr
+
+        -- 屏幕中心到鼠标的方向 = 玩家朝向
+        local dx = mx - logW / 2
+        local dy = my - logH / 2
+        if dx ~= 0 or dy ~= 0 then
+            p.facing = math.atan(dy, dx)
+            facingSet = true
+        end
+    end
+
+    -- 如果没有鼠标/右摇杆输入, 用左摇杆移动方向作为朝向
+    if not facingSet and moveInput.x ~= 0 or moveInput.y ~= 0 then
+        if not facingSet then
+            local mLen = math.sqrt(moveInput.x * moveInput.x + moveInput.y * moveInput.y)
+            if mLen > 0.3 then
+                p.facing = math.atan(moveInput.y, moveInput.x)
+            end
+        end
+    end
+
+    -- 手柄按键: A=攻击, RT(右扳机)也可攻击
+    if gamepad then
+        if gamepad:GetButtonPress(CONTROLLER_BUTTON_A) then
+            if gamePhase == "day" and not inventoryOpen then
+                performAttack(p)
+            end
+        end
+        -- RT 扳机攻击(值 > 0.5 视为按下)
+        local rt = gamepad:GetAxisPosition(CONTROLLER_AXIS_TRIGGERRIGHT)
+        if rt > 0.5 and p.attackCooldown <= 0 and p.attackState == "idle" then
+            if gamePhase == "day" and not inventoryOpen then
+                performAttack(p)
+            end
+        end
     end
 end
 
@@ -1803,6 +2267,26 @@ function Start()
         print("ERROR: Failed to load font")
     end
 
+    -- 加载猪角色图片
+    for i = 1, #PIG_IMAGE_PATHS do
+        local img = nvgCreateImage(nvgContext, PIG_IMAGE_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load pig image: " .. PIG_IMAGE_PATHS[i])
+        else
+            print("Loaded pig image " .. i .. ": " .. PIG_IMAGE_PATHS[i])
+        end
+        pigImages[i] = img
+    end
+
+    -- 加载鬼魂图片
+    ghostImage = nvgCreateImage(nvgContext, GHOST_IMAGE_PATH, 0)
+    if ghostImage == 0 or ghostImage == -1 then
+        print("WARNING: Failed to load ghost image: " .. GHOST_IMAGE_PATH)
+        ghostImage = nil
+    else
+        print("Loaded ghost image: " .. GHOST_IMAGE_PATH)
+    end
+
     -- 初始化UI
     InitGameUI()
 
@@ -1821,6 +2305,18 @@ function Start()
     SubscribeToEvent("TouchBegin", "HandleTouchBegin")
     SubscribeToEvent("TouchEnd", "HandleTouchEnd")
     SubscribeToEvent("TouchMove", "HandleTouchMove")
+
+    -- 手柄连接/断开事件
+    SubscribeToEvent("JoystickConnected", "HandleJoystickConnected")
+    SubscribeToEvent("JoystickDisconnected", "HandleJoystickDisconnected")
+
+    -- 启动时检测已连接的手柄
+    for i = 0, input.numJoysticks - 1 do
+        local js = input:GetJoystickByIndex(i)
+        if js and js:IsController() then
+            print("[手柄] 检测到已连接手柄: " .. js.name)
+        end
+    end
 
     print("=== 《道友请留步》已启动 ===")
 end
@@ -1892,7 +2388,7 @@ function CreateMenuPanel()
                         fontColor = { 150, 150, 180, 200 },
                     },
                     UI.Label {
-                        text = "WASD移动 | 鼠标左键攻击\nTAB打开背包 | 攻击传毒求生",
+                        text = "WASD移动 | 鼠标左键攻击\nTAB打开背包 | 攻击传毒求生\n手柄: 左摇杆移动 右摇杆瞄准 A攻击",
                         fontSize = 12,
                         fontColor = { 120, 120, 150, 180 },
                     },
@@ -2212,6 +2708,20 @@ function HandleUpdate(eventType, eventData)
     -- 10.2 毒值警告cooldown
     if poisonWarnCooldown > 0 then poisonWarnCooldown = poisonWarnCooldown - dt end
 
+    -- 舒适区冷却计时器更新
+    for _, zone in ipairs(comfortZones) do
+        if (zone.zoneCooldown or 0) > 0 then
+            zone.zoneCooldown = zone.zoneCooldown - dt
+            if zone.zoneCooldown <= 0 then
+                zone.zoneCooldown = 0
+                -- 冷却结束, 如果还有剩余次数则恢复能量
+                if (zone.zoneUsesLeft or 0) > 0 then
+                    zone.zoneEnergy = 100
+                end
+            end
+        end
+    end
+
     if gamePhase == "menu" then
         return
     end
@@ -2274,6 +2784,65 @@ function HandleUpdate(eventType, eventData)
     else
         -- 背包打开时每帧刷新按钮disabled状态(攻击后摇结束后立即可点)
         updateInventoryUI()
+    end
+
+    -- 手柄按键轮询(非移动操作: 背包/交互/使用物品等)
+    local gamepad = getGamepad()
+    if gamepad then
+        local p = players[localPlayerIdx]
+        if p and p.alive then
+            -- Y键 = 打开/关闭背包(TAB)
+            if gamepad:GetButtonPress(CONTROLLER_BUTTON_Y) then
+                if gamePhase ~= "menu" and gamePhase ~= "victory" then
+                    inventoryOpen = not inventoryOpen
+                    local invPanel = uiRoot_:FindById("inventoryPanel")
+                    if invPanel then invPanel:SetVisible(inventoryOpen) end
+                    if inventoryOpen then updateInventoryUI() end
+                end
+            end
+            -- X键 = 交互(E键)
+            if gamepad:GetButtonPress(CONTROLLER_BUTTON_X) then
+                if gamePhase == "day" then
+                    if p.interactState == "idle" then
+                        local targetIdx = findNearestInteractable(p)
+                        if targetIdx then requestInteract(p, targetIdx) end
+                    elseif p.interactState == "pending" then
+                        acceptInteract(p)
+                    end
+                end
+            end
+            -- B键 = 使用物品/取消交互
+            if gamepad:GetButtonPress(CONTROLLER_BUTTON_B) then
+                if p.interactState ~= "idle" then
+                    cancelInteract(p)
+                elseif p.potionState and gamePhase == "day" then
+                    useItem()
+                elseif inventoryOpen then
+                    inventoryOpen = false
+                    local invPanel = uiRoot_:FindById("inventoryPanel")
+                    if invPanel then invPanel:SetVisible(false) end
+                end
+            end
+            -- DPAD UP/DOWN = 交互中选择给予解药/毒药(1/2键)
+            if p.interactState == "interacting" and p.potionState then
+                if gamepad:GetButtonPress(CONTROLLER_BUTTON_DPAD_UP) then
+                    giveItem(p, "antidote")
+                elseif gamepad:GetButtonPress(CONTROLLER_BUTTON_DPAD_DOWN) then
+                    giveItem(p, "poison")
+                end
+            end
+            -- START键 = 开始游戏(菜单界面)
+            if gamepad:GetButtonPress(CONTROLLER_BUTTON_START) then
+                if gamePhase == "menu" then
+                    startGame()
+                end
+            end
+        elseif gamePhase == "menu" then
+            -- 菜单界面任意按键开始
+            if gamepad:GetButtonPress(CONTROLLER_BUTTON_A) or gamepad:GetButtonPress(CONTROLLER_BUTTON_START) then
+                startGame()
+            end
+        end
     end
 
     -- 游戏阶段逻辑
@@ -2454,6 +3023,27 @@ function HandleKeyDown(eventType, eventData)
             end
         end
     end
+end
+
+-- ============================================================================
+-- 手柄连接/断开事件
+-- ============================================================================
+
+function HandleJoystickConnected(eventType, eventData)
+    local id = eventData:GetInt("JoystickID")
+    local js = input:GetJoystick(id)
+    if js then
+        if js:IsController() then
+            print("[手柄] 手柄已连接: " .. js.name .. " (ID=" .. id .. ")")
+        else
+            print("[手柄] 摇杆设备已连接: " .. js.name .. " (非标准手柄)")
+        end
+    end
+end
+
+function HandleJoystickDisconnected(eventType, eventData)
+    local id = eventData:GetInt("JoystickID")
+    print("[手柄] 设备已断开 (ID=" .. id .. ")")
 end
 
 -- ============================================================================
@@ -2763,7 +3353,7 @@ function HandleRender(eventType, eventData)
         local dpr = graphics:GetDPR()
         local logW = screenW / dpr
         local logH = screenH / dpr
-        nvgBeginFrame(nvgContext, screenW, screenH, dpr)
+        nvgBeginFrame(nvgContext, logW, logH, dpr)
         if gamePhase == "victory" then
             drawVictoryScreen(logW, logH)
         else
@@ -2783,7 +3373,7 @@ function HandleRender(eventType, eventData)
     local logW = screenW / dpr
     local logH = screenH / dpr
 
-    nvgBeginFrame(nvgContext, screenW, screenH, dpr)
+    nvgBeginFrame(nvgContext, logW, logH, dpr)
 
     -- 坐标变换: 世界坐标 → 屏幕坐标(含4.3屏幕震动偏移)
     local shakeOX = 0
@@ -2792,15 +3382,23 @@ function HandleRender(eventType, eventData)
         shakeOX = (math.random() - 0.5) * 2 * screenShake.intensity
         shakeOY = (math.random() - 0.5) * 2 * screenShake.intensity
     end
-    local offsetX = logW / 2 - camera.x + shakeOX
-    local offsetY = logH / 2 - camera.y + shakeOY
+    -- ===== 2x 相机缩放(人物和场景放大2倍, 场景范围不变) =====
+    local CAM_ZOOM = 2.0
+    local offsetX = logW / 2 / CAM_ZOOM - camera.x + shakeOX
+    local offsetY = logH / 2 / CAM_ZOOM - camera.y + shakeOY
+
+    -- 应用缩放变换(世界渲染区域)
+    nvgSave(nvgContext)
+    nvgTranslate(nvgContext, logW / 2, logH / 2)
+    nvgScale(nvgContext, CAM_ZOOM, CAM_ZOOM)
+    nvgTranslate(nvgContext, -logW / 2 / CAM_ZOOM, -logH / 2 / CAM_ZOOM)
 
     -- 所有游戏阶段正常渲染(不再有全屏黑/淘汰展示页)
     -- 1. 绘制地面(饥荒风格泥土/草地)
-    drawGroundDST(logW, logH, offsetX, offsetY)
+    drawGroundDST(logW / CAM_ZOOM, logH / CAM_ZOOM, offsetX, offsetY)
 
     -- 2. 绘制地面草丛纹理
-    drawGroundPatches(logW, logH, offsetX, offsetY)
+    drawGroundPatches(logW / CAM_ZOOM, logH / CAM_ZOOM, offsetX, offsetY)
 
     -- 3. 绘制毒圈
     drawPoisonCircleDST(offsetX, offsetY)
@@ -2812,7 +3410,7 @@ function HandleRender(eventType, eventData)
     drawDeathEffects(offsetX, offsetY)
 
     -- 4. 绘制环境装饰(树木、岩石 - 按深度与玩家交错)
-    drawEnvironmentAndPlayers(logW, logH, offsetX, offsetY)
+    drawEnvironmentAndPlayers(logW / CAM_ZOOM, logH / CAM_ZOOM, offsetX, offsetY)
 
     -- 5. 绘制攻击特效
     drawAttackEffectsDST(offsetX, offsetY)
@@ -2824,7 +3422,10 @@ function HandleRender(eventType, eventData)
     drawFloatingTexts(offsetX, offsetY)
 
     -- 8.2 绘制交互UI(按钮提示+选项面板+抛物线动画)
-    drawInteractionUI(logW, logH, offsetX, offsetY)
+    drawInteractionUI(logW / CAM_ZOOM, logH / CAM_ZOOM, offsetX, offsetY)
+
+    -- 恢复缩放变换(后续HUD在屏幕空间绘制)
+    nvgRestore(nvgContext)
 
     -- 7. 暗角效果(Vignette)
     drawVignette(logW, logH)
@@ -2854,7 +3455,7 @@ function HandleRender(eventType, eventData)
         -- 10. 阶段提示文字
         drawPhaseHint(logW, logH)
         -- 10.5 屏幕边缘方向指示标(指向视野外的舒适区和携带解药玩家)
-        drawOffscreenIndicators(logW, logH, offsetX, offsetY)
+        drawOffscreenIndicators(logW, logH, offsetX, offsetY, CAM_ZOOM)
     end
 
     -- 11. 触控按钮(手机适配, 仅触控设备显示)
@@ -3769,6 +4370,80 @@ function drawComfortZones(ox, oy)
             end
         end
 
+        -- ===== 舒适区能量条 + 冷却/次数显示 =====
+        if not zone.corrupted then
+            local barW = 60
+            local barH = 6
+            local barX = sx - barW / 2
+            local barY = sy + 20
+
+            local energy = zone.zoneEnergy or 100
+            local cooldown = zone.zoneCooldown or 0
+            local usesLeft = zone.zoneUsesLeft or 5
+
+            if usesLeft <= 0 then
+                -- 已耗尽: 显示"已耗尽"文字
+                nvgFontFace(ctx, "sans")
+                nvgFontSize(ctx, 10)
+                nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(ctx, nvgRGBA(180, 60, 60, 200))
+                nvgText(ctx, sx, barY + barH / 2, "已耗尽")
+            elseif cooldown > 0 then
+                -- 冷却中: 灰色背景条 + 冷却倒计时
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, barX, barY, barW, barH, 3)
+                nvgFillColor(ctx, nvgRGBA(40, 40, 40, 160))
+                nvgFill(ctx)
+                -- 冷却进度(从右往左缩减)
+                local cdRatio = cooldown / 5.0
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, barX, barY, barW * cdRatio, barH, 3)
+                nvgFillColor(ctx, nvgRGBA(100, 100, 120, 180))
+                nvgFill(ctx)
+                -- 冷却时间文字
+                nvgFontFace(ctx, "sans")
+                nvgFontSize(ctx, 9)
+                nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(ctx, nvgRGBA(200, 200, 200, 220))
+                nvgText(ctx, sx, barY + barH / 2, string.format("%.1fs", cooldown))
+            else
+                -- 正常: 能量条
+                -- 背景
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, barX, barY, barW, barH, 3)
+                nvgFillColor(ctx, nvgRGBA(30, 30, 30, 150))
+                nvgFill(ctx)
+                -- 能量填充
+                local ratio = energy / 100
+                local eR = math.floor(80 + (1 - ratio) * 150)
+                local eG = math.floor(200 * ratio)
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, barX, barY, barW * ratio, barH, 3)
+                nvgFillColor(ctx, nvgRGBA(eR, eG, 40, 200))
+                nvgFill(ctx)
+                -- 边框
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, barX, barY, barW, barH, 3)
+                nvgStrokeColor(ctx, nvgRGBA(139, 105, 20, 80))
+                nvgStrokeWidth(ctx, 0.8)
+                nvgStroke(ctx)
+            end
+
+            -- 剩余次数(小点)
+            if usesLeft > 0 then
+                local dotR = 2.5
+                local dotGap = 8
+                local dotsW = usesLeft * dotGap
+                local dotStartX = sx - dotsW / 2 + dotGap / 2
+                for di = 1, usesLeft do
+                    nvgBeginPath(ctx)
+                    nvgCircle(ctx, dotStartX + (di - 1) * dotGap, barY + barH + 7, dotR)
+                    nvgFillColor(ctx, nvgRGBA(139, 105, 20, 180))
+                    nvgFill(ctx)
+                end
+            end
+        end
+
         ::continueZone::
     end
 
@@ -3802,11 +4477,54 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
     local sx = p.x + ox
     local sy = p.y + oy
 
-    -- 鬼魂半透明渲染
+    -- 鬼魂: 使用鬼魂图片渲染
     local isGhost = p.isGhost
     if isGhost then
+        local ghostW = 64
+        local ghostH = 64
+        local ghostX = sx - ghostW / 2
+        local ghostY = sy - ghostH + 4  -- 脚底对齐
+
+        -- 上下浮动动画
+        local time = GetTime():GetElapsedTime()
+        local floatOffset = math.sin(time * 2.5 + p.idx * 1.2) * 4
+        ghostY = ghostY + floatOffset
+
+        -- 半透明绘制鬼魂图片
         nvgSave(ctx)
-        nvgGlobalAlpha(ctx, 0.35)
+        nvgGlobalAlpha(ctx, 0.55)
+
+        if ghostImage then
+            -- 根据移动方向翻转
+            local flipX = (p.flipDir < 0)
+            if flipX then
+                nvgTranslate(ctx, ghostX + ghostW / 2, 0)
+                nvgScale(ctx, -1, 1)
+                nvgTranslate(ctx, -(ghostX + ghostW / 2), 0)
+            end
+            local paint = nvgImagePattern(ctx, ghostX, ghostY, ghostW, ghostH, 0, ghostImage, 1.0)
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, ghostX, ghostY, ghostW, ghostH, 4)
+            nvgFillPaint(ctx, paint)
+            nvgFill(ctx)
+        else
+            -- fallback: 半透明圆形
+            nvgBeginPath(ctx)
+            nvgCircle(ctx, sx, sy - ghostH / 2, 20)
+            nvgFillColor(ctx, nvgRGBA(200, 200, 255, 120))
+            nvgFill(ctx)
+        end
+
+        nvgRestore(ctx)
+
+        -- 绘制玩家名字(鬼魂头顶)
+        nvgFontFace(ctx, "sans")
+        nvgFontSize(ctx, 12)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(200, 200, 255, 140))
+        nvgText(ctx, sx, ghostY - 8, p.name)
+
+        return  -- 鬼魂不再绘制正常角色体
     end
 
     -- ===== 尺寸定义(1:2头身比 - Q版恐怖纸片人) =====
@@ -3891,162 +4609,80 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         bendOffset = 4  -- 弯腰下沉
     end
 
-    -- ===== 腿(细长条, 关节折痕) =====
-    nvgStrokeColor(ctx, nvgRGBA(outR, outG, outB, 240))
-    nvgStrokeWidth(ctx, outlineW)
-    nvgLineCap(ctx, NVG_ROUND)
+    -- ===== 猪角色图片渲染(替代原始纸片人) =====
+    local imgHandle = pigImages[p.avatarIdx]
+    local imgW = 72   -- 图片绘制宽度(像素)
+    local imgH = 72   -- 图片绘制高度(像素)
+    local imgX = sx - imgW / 2
+    local imgY = baseY - imgH + bendOffset  -- 脚底对齐世界坐标
 
-    -- 行走动画
-    local walkCycle = 0
+    -- 行走动画: 轻微上下弹跳
+    local walkBounce = 0
     if p.vx ~= 0 or p.vy ~= 0 then
-        local speed = (p.energy <= 0) and 5 or 8  -- 能量枯竭时拖拽感
-        walkCycle = math.sin(GetTime():GetElapsedTime() * speed + p.idx) * 4
+        local speed = (p.energy <= 0) and 5 or 8
+        walkBounce = math.abs(math.sin(GetTime():GetElapsedTime() * speed + p.idx)) * 3
+    end
+    imgY = imgY - walkBounce
+
+    -- 攻击时前冲效果
+    local attackLunge = 0
+    if p.attacking then attackLunge = 4 end
+    imgX = imgX + math.cos(p.facing) * attackLunge
+    imgY = imgY + math.sin(p.facing) * attackLunge
+
+    -- 能量枯竭时变暗(叠加半透明黑色)
+    local imgAlpha = 1.0
+    if p.energy <= 0 then
+        imgAlpha = 0.6
     end
 
-    -- 左腿(细长, 膝盖折痕)
-    local lKneeX = sx - 4 - walkCycle * 0.3
-    local lKneeY = baseY - legLen * 0.5
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, sx - 3, baseY - legLen + bendOffset)
-    nvgLineTo(ctx, lKneeX, lKneeY + bendOffset)
-    nvgLineTo(ctx, sx - 4 - walkCycle, baseY)
-    nvgStroke(ctx)
-    -- 关节点
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, lKneeX, lKneeY + bendOffset, 2)
-    nvgFillColor(ctx, nvgRGBA(outR + 20, outG + 15, outB + 10, 180))
-    nvgFill(ctx)
+    -- hitFlash 时变白(先画白底)
+    if p.hitFlash > 0 then
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, imgX + 2, imgY + 2, imgW - 4, imgH - 4, 6)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, math.floor(200 * (p.hitFlash / 0.15))))
+        nvgFill(ctx)
+    end
 
-    -- 右腿
-    local rKneeX = sx + 4 + walkCycle * 0.3
-    local rKneeY = baseY - legLen * 0.5
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, sx + 3, baseY - legLen + bendOffset)
-    nvgLineTo(ctx, rKneeX, rKneeY + bendOffset)
-    nvgLineTo(ctx, sx + 4 + walkCycle, baseY)
-    nvgStroke(ctx)
-    -- 关节点
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, rKneeX, rKneeY + bendOffset, 2)
-    nvgFillColor(ctx, nvgRGBA(outR + 20, outG + 15, outB + 10, 180))
-    nvgFill(ctx)
+    -- 绘制猪角色图片(根据移动方向左右翻转: PC用AD键, 触控/手柄用摇杆方向)
+    local flipX = (p.flipDir < 0)  -- flipDir=-1时翻转(朝左)
+    if imgHandle and imgHandle ~= 0 and imgHandle ~= -1 then
+        nvgSave(ctx)
+        if flipX then
+            -- 水平翻转: 以图片中心为轴
+            nvgTranslate(ctx, imgX + imgW / 2, 0)
+            nvgScale(ctx, -1, 1)
+            nvgTranslate(ctx, -(imgX + imgW / 2), 0)
+        end
+        local paint = nvgImagePattern(ctx, imgX, imgY, imgW, imgH, 0, imgHandle, imgAlpha)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, imgX, imgY, imgW, imgH, 4)
+        nvgFillPaint(ctx, paint)
+        nvgFill(ctx)
+        nvgRestore(ctx)
+    else
+        -- fallback: 绘制一个彩色圆形代替
+        nvgBeginPath(ctx)
+        nvgCircle(ctx, sx, baseY - imgH / 2 + bendOffset, 20)
+        nvgFillColor(ctx, nvgRGBA(cr, cg, cb, 230))
+        nvgFill(ctx)
+    end
 
-    -- ===== 身体(纤细椭圆 + 粗描边) =====
-    nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx, bodyTop + bodyH * 0.5 + bendOffset, bodyW * 0.5, bodyH * 0.5)
-    nvgFillColor(ctx, nvgRGBA(cr, cg, cb, 230))
-    nvgFill(ctx)
-    -- 中毒时身体叠加紫绿斑纹
-    if poisonRatio > 0 then
-        local spotA = math.floor(poisonRatio * 120)
-        for sp = 1, 3 do
-            local spX = sx + math.sin(sp * 2.3 + p.idx) * bodyW * 0.3
-            local spY = bodyTop + bodyH * (0.25 + sp * 0.2) + bendOffset
+    -- 中毒时叠加绿色斑纹效果(覆盖在图片上)
+    if poisonRatio > 0.2 then
+        local spotA = math.floor(poisonRatio * 80)
+        for sp = 1, 4 do
+            local spX = sx + math.sin(sp * 2.3 + p.idx) * 12
+            local spY = baseY - imgH * (0.3 + sp * 0.15) + bendOffset
             nvgBeginPath(ctx)
-            nvgEllipse(ctx, spX, spY, 3 + poisonRatio * 2, 2 + poisonRatio)
-            nvgFillColor(ctx, nvgRGBA(46, 74, 62, spotA))  -- 紫绿斑纹 #2E4A3E
+            nvgCircle(ctx, spX, spY, 3 + poisonRatio * 2)
+            nvgFillColor(ctx, nvgRGBA(46, 74, 62, spotA))
             nvgFill(ctx)
         end
     end
-    -- 身体粗描边(3-5px)
-    nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx, bodyTop + bodyH * 0.5 + bendOffset, bodyW * 0.5, bodyH * 0.5)
-    nvgStrokeColor(ctx, nvgRGBA(outR, outG, outB, 220))
-    nvgStrokeWidth(ctx, outlineW)
-    nvgStroke(ctx)
 
-    -- ===== 手臂(细长条, 关节折痕) =====
-    nvgStrokeColor(ctx, nvgRGBA(outR, outG, outB, 230))
-    nvgStrokeWidth(ctx, 3)
-
-    -- 攻击时手臂前伸
-    local armSwing = 0
-    if p.attacking then armSwing = 10 end
-
-    -- 左臂(肘关节折痕)
-    local lElbowX = sx - bodyW - 2
-    local lElbowY = bodyTop + bodyH * 0.4 + bendOffset
-    local lHandX = lElbowX - 3 - armSwing * math.cos(p.facing)
-    local lHandY = lElbowY + 6 - armSwing * math.sin(p.facing)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, sx - bodyW * 0.5, bodyTop + bodyH * 0.25 + bendOffset)
-    nvgLineTo(ctx, lElbowX, lElbowY)
-    nvgLineTo(ctx, lHandX, lHandY)
-    nvgStroke(ctx)
-    -- 肘关节点
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, lElbowX, lElbowY, 1.8)
-    nvgFillColor(ctx, nvgRGBA(outR + 20, outG + 15, outB + 10, 160))
-    nvgFill(ctx)
-
-    -- 右臂
-    local rElbowX = sx + bodyW + 2
-    local rElbowY = bodyTop + bodyH * 0.4 + bendOffset
-    local rHandX = rElbowX + 3 + armSwing * math.cos(p.facing)
-    local rHandY = rElbowY + 6 + armSwing * math.sin(p.facing)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, sx + bodyW * 0.5, bodyTop + bodyH * 0.25 + bendOffset)
-    nvgLineTo(ctx, rElbowX, rElbowY)
-    nvgLineTo(ctx, rHandX, rHandY)
-    nvgStroke(ctx)
-    -- 肘关节点
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, rElbowX, rElbowY, 1.8)
-    nvgFillColor(ctx, nvgRGBA(outR + 20, outG + 15, outB + 10, 160))
-    nvgFill(ctx)
-
-    -- ===== 头部(大圆 - 1:2头身比核心) =====
-    local headDrawY = headY + bendOffset
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, sx, headDrawY, headR)
-    -- 头部填充(灰白, 比身体稍浅)
-    nvgFillColor(ctx, nvgRGBA(
-        math.min(255, cr + 25),
-        math.min(255, cg + 22),
-        math.min(255, cb + 18), 240))
-    nvgFill(ctx)
-    -- 头部粗描边(4-5px)
-    nvgStrokeColor(ctx, nvgRGBA(outR, outG, outB, 245))
-    nvgStrokeWidth(ctx, outlineW + 1)
-    nvgStroke(ctx)
-
-    -- ===== 眼睛(两个黑色圆点, 中毒时变绿色竖瞳) =====
-    local eyeOffX = math.cos(p.facing) * 3
-    local eyeOffY = math.sin(p.facing) * 1.5
-    local eyeY = headDrawY - 1
-
-    if poisonRatio > 0.1 then
-        -- 中毒眼: 绿色竖瞳 + 发光
-        local glowA = math.floor(60 + poisonRatio * 100)
-        -- 绿光发光(底层)
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx - 5 + eyeOffX * 0.4, eyeY, 5)
-        nvgFillColor(ctx, nvgRGBA(74, 124, 89, glowA))
-        nvgFill(ctx)
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx + 5 + eyeOffX * 0.4, eyeY, 5)
-        nvgFillColor(ctx, nvgRGBA(74, 124, 89, glowA))
-        nvgFill(ctx)
-        -- 竖瞳(绿色竖椭圆)
-        nvgBeginPath(ctx)
-        nvgEllipse(ctx, sx - 5 + eyeOffX * 0.5, eyeY + eyeOffY * 0.3, 1.8, 3.5)
-        nvgFillColor(ctx, nvgRGBA(30, 200, 60, 255))
-        nvgFill(ctx)
-        nvgBeginPath(ctx)
-        nvgEllipse(ctx, sx + 5 + eyeOffX * 0.5, eyeY + eyeOffY * 0.3, 1.8, 3.5)
-        nvgFillColor(ctx, nvgRGBA(30, 200, 60, 255))
-        nvgFill(ctx)
-    else
-        -- 正常眼: 两个黑色圆点
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx - 5 + eyeOffX * 0.5, eyeY + eyeOffY * 0.3, 2.5)
-        nvgFillColor(ctx, nvgRGBA(8, 5, 5, 255))
-        nvgFill(ctx)
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx + 5 + eyeOffX * 0.5, eyeY + eyeOffY * 0.3, 2.5)
-        nvgFillColor(ctx, nvgRGBA(8, 5, 5, 255))
-        nvgFill(ctx)
-    end
+    -- headDrawY 用于后续效果定位(头顶位置)
+    local headDrawY = imgY + 4
 
     -- ===== 中毒绿色粒子(头顶飘出) =====
     if poisonRatio > 0.1 then
@@ -4072,10 +4708,10 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         nvgStroke(ctx)
     end
 
-    -- ===== 能量心脏(头顶常驻 - 2.5 UI) =====
+    -- ===== 能量心脏(脚下常驻 - 2.5 UI) =====
     do
-        local heartCX = sx
-        local heartCY = headDrawY - headR - 20
+        local heartCX = sx - 18
+        local heartCY = baseY + 16
         local heartSize = 7  -- 心脏半径参考
 
         -- 心脏形状路径(手绘感, 用贝塞尔)
@@ -4161,12 +4797,12 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         end
     end
 
-    -- ===== 毒药条(头顶) =====
+    -- ===== 毒药条(脚下) =====
     if p.poison > 0 then
-        local barW = 28
+        local barW = 26
         local barH = 4
-        local barX = sx - barW / 2
-        local barY = headDrawY - headR - 12
+        local barX = sx - 2
+        local barY = baseY + 13
 
         -- 背景
         nvgBeginPath(ctx)
@@ -4183,6 +4819,24 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
             math.floor(74 + poisonRatio * 50),
             math.floor(62 + poisonRatio * 27), 230))
         nvgFill(ctx)
+    end
+
+    -- ===== 毒满暴走buff指示(头顶闪烁紫色光环) =====
+    if p.poisonMaxBuff then
+        local time = GetTime():GetElapsedTime()
+        local pulse = 0.6 + 0.4 * math.sin(time * 8)
+        local alpha = math.floor(180 * pulse)
+        nvgBeginPath(ctx)
+        nvgCircle(ctx, sx, headDrawY - headR - 6, headR + 6)
+        nvgStrokeColor(ctx, nvgRGBA(255, 0, 180, alpha))
+        nvgStrokeWidth(ctx, 2.5)
+        nvgStroke(ctx)
+        -- 暴走文字
+        nvgFontSize(ctx, 9)
+        nvgFontFace(ctx, "sans")
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
+        nvgFillColor(ctx, nvgRGBA(255, 80, 200, alpha))
+        nvgText(ctx, sx, headDrawY - headR - 14, "暴走", nil)
     end
 
     -- ===== 5.2 喝药读条(头顶进度条) =====
@@ -4258,13 +4912,13 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         nvgFill(ctx)
     end
 
-    -- ===== 编号标签 =====
+    -- ===== 编号标签(头顶) =====
     if fontId ~= -1 then
         nvgFontFaceId(ctx, fontId)
-        nvgFontSize(ctx, 9)
-        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(180, 170, 150, 120))
-        nvgText(ctx, sx, baseY + 8, "P" .. tostring(p.idx), nil)
+        nvgFontSize(ctx, 10)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
+        nvgFillColor(ctx, nvgRGBA(220, 210, 190, 180))
+        nvgText(ctx, sx, headDrawY - 2, "P" .. tostring(p.idx), nil)
     end
 
     -- ===== 状态特效 =====
@@ -4528,16 +5182,6 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         end
     end
 
-    -- 鬼魂恢复透明度
-    if isGhost then
-        nvgRestore(ctx)
-        -- 绘制鬼魂标识(头顶小幽灵图标)
-        nvgFontFace(ctx, "sans")
-        nvgFontSize(ctx, 14)
-        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(200, 200, 255, 120))
-        nvgText(ctx, sx, headDrawY - headR - 10, "👻")
-    end
 end
 
 -- ============================================================================
@@ -5155,6 +5799,10 @@ function drawEliminationPage(logW, logH)
     if not ctx then return end
     if #settleDeaths == 0 then return end
 
+    -- 淘汰页面(与胜利页面相同大小, 全屏绘制)
+    local eLogW = logW
+    local eLogH = logH
+
     local time = GetTime():GetElapsedTime()
 
     -- 标题: "本轮淘汰"
@@ -5162,16 +5810,16 @@ function drawEliminationPage(logW, logH)
     nvgFontSize(ctx, 28)
     nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
     nvgFillColor(ctx, nvgRGBA(220, 60, 60, 240))
-    nvgText(ctx, logW / 2, logH * 0.25, "本轮淘汰")
+    nvgText(ctx, eLogW / 2, eLogH * 0.25, "本轮淘汰")
 
     -- 死亡玩家列表(居中排列)
     local count = #settleDeaths
-    local cardW = 70
-    local cardH = 90
-    local gap = 15
+    local cardW = 140
+    local cardH = 180
+    local gap = 20
     local totalW = count * cardW + (count - 1) * gap
-    local startX = (logW - totalW) / 2
-    local startY = logH * 0.35
+    local startX = (eLogW - totalW) / 2
+    local startY = eLogH * 0.35
 
     for idx = 1, count do
         local pIdx = settleDeaths[idx]
@@ -5189,19 +5837,22 @@ function drawEliminationPage(logW, logH)
             nvgStrokeWidth(ctx, 2)
             nvgStroke(ctx)
 
-            -- 玩家头像(用颜色圆圈代表)
-            local headR = 18
-            local headY = cy - 12
-            nvgBeginPath(ctx)
-            nvgCircle(ctx, cx, headY, headR)
-            nvgFillColor(ctx, nvgRGBA(p.color[1], p.color[2], p.color[3], 220))
-            nvgFill(ctx)
-            nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 200))
-            nvgStrokeWidth(ctx, 3)
-            nvgStroke(ctx)
+            -- 猪角色头像(放大三倍)
+            local avatarSize = 108
+            local avatarX = cx - avatarSize / 2
+            local avatarY = cy - 50
+            local pImgHandle = pigImages[p.avatarIdx]
+            if pImgHandle and pImgHandle ~= 0 and pImgHandle ~= -1 then
+                local paint = nvgImagePattern(ctx, avatarX, avatarY, avatarSize, avatarSize, 0, pImgHandle, 0.8)
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, avatarX, avatarY, avatarSize, avatarSize, 6)
+                nvgFillPaint(ctx, paint)
+                nvgFill(ctx)
+            end
 
             -- 死亡标记(红色X)
-            local xSize = 10
+            local headY = avatarY + avatarSize / 2
+            local xSize = 24
             nvgBeginPath(ctx)
             nvgMoveTo(ctx, cx - xSize, headY - xSize)
             nvgLineTo(ctx, cx + xSize, headY + xSize)
@@ -5213,11 +5864,11 @@ function drawEliminationPage(logW, logH)
 
             -- 玩家编号
             nvgFontFace(ctx, "sans")
-            nvgFontSize(ctx, 14)
+            nvgFontSize(ctx, 20)
             nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
             nvgFillColor(ctx, nvgRGBA(200, 200, 200, 220))
             local label = (pIdx == localPlayerIdx) and "你" or ("P" .. pIdx)
-            nvgText(ctx, cx, cy + 28, label)
+            nvgText(ctx, cx, cy + 70, label)
 
             -- 死因标注
             nvgFontSize(ctx, 11)
@@ -5231,7 +5882,7 @@ function drawEliminationPage(logW, logH)
     nvgFontSize(ctx, 16)
     nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
     nvgFillColor(ctx, nvgRGBA(180, 180, 180, 200))
-    nvgText(ctx, logW / 2, logH * 0.72, "剩余存活: " .. aliveCount .. " 人")
+    nvgText(ctx, eLogW / 2, eLogH * 0.72, "剩余存活: " .. aliveCount .. " 人")
 end
 
 -- ============================================================================
@@ -5450,21 +6101,21 @@ function drawClockCountdown(logW, logH)
     nvgTranslate(ctx, cx + shakeX, cy + shakeY)
     nvgScale(ctx, scale, scale)
 
-    local clockR = 28
+    local clockR = 44
 
     -- 钟表外壳(老式铜色圆环)
     -- 外环
     nvgBeginPath(ctx)
-    nvgCircle(ctx, 0, 0, clockR + 4)
+    nvgCircle(ctx, 0, 0, clockR + 5)
     nvgStrokeColor(ctx, nvgRGBA(120, 85, 40, 220))
-    nvgStrokeWidth(ctx, 3.5)
+    nvgStrokeWidth(ctx, 4.5)
     nvgStroke(ctx)
 
     -- 内环
     nvgBeginPath(ctx)
     nvgCircle(ctx, 0, 0, clockR)
     nvgStrokeColor(ctx, nvgRGBA(90, 65, 30, 200))
-    nvgStrokeWidth(ctx, 2)
+    nvgStrokeWidth(ctx, 2.5)
     nvgStroke(ctx)
 
     -- 表盘背景(泛黄纸质感)
@@ -5500,15 +6151,15 @@ function drawClockCountdown(logW, logH)
 
     -- 中心铆钉
     nvgBeginPath(ctx)
-    nvgCircle(ctx, 0, 0, 3)
+    nvgCircle(ctx, 0, 0, 4)
     nvgFillColor(ctx, nvgRGBA(80, 60, 30, 240))
     nvgFill(ctx)
 
     -- 顶部小环(老式挂表的挂环)
     nvgBeginPath(ctx)
-    nvgCircle(ctx, 0, -(clockR + 8), 5)
+    nvgCircle(ctx, 0, -(clockR + 10), 7)
     nvgStrokeColor(ctx, nvgRGBA(120, 85, 40, 200))
-    nvgStrokeWidth(ctx, 2)
+    nvgStrokeWidth(ctx, 2.5)
     nvgStroke(ctx)
 
     nvgRestore(ctx)
@@ -5520,7 +6171,7 @@ function drawClockCountdown(logW, logH)
         nvgScale(ctx, scale, scale)
 
         nvgFontFaceId(ctx, fontId)
-        nvgFontSize(ctx, 22)
+        nvgFontSize(ctx, 32)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
 
         -- 文字阴影
@@ -5539,8 +6190,9 @@ end
 -- 屏幕边缘方向指示标(指向视野外的舒适区和携带解药玩家)
 -- ============================================================================
 
-function drawOffscreenIndicators(logW, logH, offsetX, offsetY)
+function drawOffscreenIndicators(logW, logH, offsetX, offsetY, zoom)
     local ctx = nvgContext
+    zoom = zoom or 1.0
     if gamePhase == "menu" or gamePhase == "victory" or gamePhase == "defeat" then return end
     if gamePhase == "settle" then return end
 
@@ -5558,8 +6210,8 @@ function drawOffscreenIndicators(logW, logH, offsetX, offsetY)
     -- 1. 非腐化舒适区
     for _, zone in ipairs(comfortZones) do
         if not zone.corrupted then
-            local sx = zone.x + offsetX
-            local sy = zone.y + offsetY
+            local sx = (zone.x - camera.x) * zoom + logW / 2
+            local sy = (zone.y - camera.y) * zoom + logH / 2
             -- 判断是否在屏幕外
             if sx < -20 or sx > logW + 20 or sy < -20 or sy > logH + 20 then
                 local r, g, b = 255, 200, 60  -- 默认黄色(campfire)
@@ -5576,8 +6228,8 @@ function drawOffscreenIndicators(logW, logH, offsetX, offsetY)
     -- 2. 携带解药的存活玩家(排除自己)
     for i, p in ipairs(players) do
         if i ~= localPlayerIdx and p.alive and p.potionState == "antidote" then
-            local sx = p.x + offsetX
-            local sy = p.y + offsetY
+            local sx = (p.x - camera.x) * zoom + logW / 2
+            local sy = (p.y - camera.y) * zoom + logH / 2
             if sx < -20 or sx > logW + 20 or sy < -20 or sy > logH + 20 then
                 table.insert(targets, {sx = sx, sy = sy, kind = "antidote", r = 60, g = 200, b = 255, label = "✚"})
             end
@@ -5784,140 +6436,37 @@ function drawVictoryScreen(logW, logH)
     nvgFillPaint(ctx, glowPaint)
     nvgFill(ctx)
 
-    -- === 全身角色展示 ===
-    local scale = 3.0  -- 放大3倍展示
-    local headR = 16 * scale
-    local bodyW = 9 * scale
-    local bodyH = 20 * scale
-    local legLen = 12 * scale
-    local armLen = 14 * scale
-    local totalH = headR * 2 + bodyH + legLen
-
-    local baseY = cy + totalH * 0.3  -- 脚底
-    local bodyTop = baseY - legLen - bodyH
-    local headY = bodyTop - headR
-
-    local cr, cg, cb = winner.color[1], winner.color[2], winner.color[3]
-    local outlineW = 4 * scale / 2
+    -- === 全身角色展示(猪角色图片放大) ===
+    local victoryImgW = 160
+    local victoryImgH = 160
+    local victoryImgX = cx - victoryImgW / 2
+    local victoryImgY = cy - victoryImgH / 2 + 10
 
     -- 阴影
     nvgBeginPath(ctx)
-    nvgEllipse(ctx, cx, baseY + 8, 40, 10)
+    nvgEllipse(ctx, cx, victoryImgY + victoryImgH + 5, 50, 12)
     nvgFillColor(ctx, nvgRGBA(0, 0, 0, 80))
     nvgFill(ctx)
 
-    -- 腿(V形站立)
-    local legSpread = 6 * scale
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx - legSpread, baseY)
-    nvgLineTo(ctx, cx - 2 * scale, bodyTop + bodyH)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, outlineW + 4)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx - legSpread, baseY)
-    nvgLineTo(ctx, cx - 2 * scale, bodyTop + bodyH)
-    nvgStrokeColor(ctx, nvgRGBA(cr * 0.6, cg * 0.6, cb * 0.6, 255))
-    nvgStrokeWidth(ctx, outlineW)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
+    -- 胜利弹跳动画
+    local bounce = math.abs(math.sin(time * 3)) * 8
+    victoryImgY = victoryImgY - bounce
 
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx + legSpread, baseY)
-    nvgLineTo(ctx, cx + 2 * scale, bodyTop + bodyH)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, outlineW + 4)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx + legSpread, baseY)
-    nvgLineTo(ctx, cx + 2 * scale, bodyTop + bodyH)
-    nvgStrokeColor(ctx, nvgRGBA(cr * 0.6, cg * 0.6, cb * 0.6, 255))
-    nvgStrokeWidth(ctx, outlineW)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-
-    -- 身体(矩形+描边)
-    nvgBeginPath(ctx)
-    nvgRoundedRect(ctx, cx - bodyW, bodyTop, bodyW * 2, bodyH, 4)
-    nvgFillColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgFill(ctx)
-    nvgBeginPath(ctx)
-    nvgRoundedRect(ctx, cx - bodyW + 2, bodyTop + 2, bodyW * 2 - 4, bodyH - 4, 3)
-    nvgFillColor(ctx, nvgRGBA(cr, cg, cb, 255))
-    nvgFill(ctx)
-
-    -- 手臂(胜利姿势 - 举起V字)
-    local armWave = math.sin(time * 4) * 5
-    -- 左臂(举起)
-    local lArmEndX = cx - 20 * scale / 3 - armLen * 0.7
-    local lArmEndY = bodyTop - armLen * 0.5 + armWave
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx - bodyW, bodyTop + 4)
-    nvgLineTo(ctx, lArmEndX, lArmEndY)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, outlineW + 4)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx - bodyW, bodyTop + 4)
-    nvgLineTo(ctx, lArmEndX, lArmEndY)
-    nvgStrokeColor(ctx, nvgRGBA(cr, cg, cb, 255))
-    nvgStrokeWidth(ctx, outlineW)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-
-    -- 右臂(举起)
-    local rArmEndX = cx + 20 * scale / 3 + armLen * 0.7
-    local rArmEndY = bodyTop - armLen * 0.5 - armWave
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx + bodyW, bodyTop + 4)
-    nvgLineTo(ctx, rArmEndX, rArmEndY)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, outlineW + 4)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, cx + bodyW, bodyTop + 4)
-    nvgLineTo(ctx, rArmEndX, rArmEndY)
-    nvgStrokeColor(ctx, nvgRGBA(cr, cg, cb, 255))
-    nvgStrokeWidth(ctx, outlineW)
-    nvgLineCap(ctx, NVG_ROUND)
-    nvgStroke(ctx)
-
-    -- 头(大圆+描边+眼睛)
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, cx, headY, headR + 3)
-    nvgFillColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgFill(ctx)
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, cx, headY, headR)
-    nvgFillColor(ctx, nvgRGBA(cr, cg, cb, 255))
-    nvgFill(ctx)
-
-    -- 眼睛(开心眯眯眼)
-    local eyeY = headY - 2
-    local eyeSpacing = headR * 0.35
-    -- 左眼(弧线笑眼)
-    nvgBeginPath(ctx)
-    nvgArc(ctx, cx - eyeSpacing, eyeY, 5, 0.2, math.pi - 0.2, NVG_CW)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, 2.5)
-    nvgStroke(ctx)
-    -- 右眼
-    nvgBeginPath(ctx)
-    nvgArc(ctx, cx + eyeSpacing, eyeY, 5, 0.2, math.pi - 0.2, NVG_CW)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, 2.5)
-    nvgStroke(ctx)
-
-    -- 嘴巴(开心大弧)
-    nvgBeginPath(ctx)
-    nvgArc(ctx, cx, headY + 6, 8, 0.3, math.pi - 0.3, NVG_CW)
-    nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 255))
-    nvgStrokeWidth(ctx, 2)
-    nvgStroke(ctx)
+    -- 绘制猪角色图片(放大)
+    local winImgHandle = pigImages[winner.avatarIdx]
+    if winImgHandle and winImgHandle ~= 0 and winImgHandle ~= -1 then
+        local paint = nvgImagePattern(ctx, victoryImgX, victoryImgY, victoryImgW, victoryImgH, 0, winImgHandle, 1.0)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, victoryImgX, victoryImgY, victoryImgW, victoryImgH, 12)
+        nvgFillPaint(ctx, paint)
+        nvgFill(ctx)
+        -- 金色边框
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, victoryImgX, victoryImgY, victoryImgW, victoryImgH, 12)
+        nvgStrokeColor(ctx, nvgRGBA(255, 215, 50, 200))
+        nvgStrokeWidth(ctx, 4)
+        nvgStroke(ctx)
+    end
 
     -- === 标题文字 ===
     nvgFontFace(ctx, "sans")
@@ -6011,23 +6560,22 @@ function drawDefeatScreen(logW, logH)
             nvgStrokeWidth(ctx, 2)
             nvgStroke(ctx)
 
-            -- 头像圆圈(玩家颜色)
-            local headR = 20
-            local headCY = cardCY - 14
-            nvgBeginPath(ctx)
-            nvgCircle(ctx, cardCX, headCY, headR)
-            -- 灰暗色调(死亡)
-            local dr = math.floor(p.color[1] * 0.4)
-            local dg = math.floor(p.color[2] * 0.4)
-            local db = math.floor(p.color[3] * 0.4)
-            nvgFillColor(ctx, nvgRGBA(dr, dg, db, 220))
-            nvgFill(ctx)
-            nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 200))
-            nvgStrokeWidth(ctx, 3)
-            nvgStroke(ctx)
+            -- 猪角色头像(缩小显示)
+            local avatarSize = 40
+            local avatarX = cardCX - avatarSize / 2
+            local avatarY = cardCY - 24
+            local pImgHandle = pigImages[p.avatarIdx]
+            if pImgHandle and pImgHandle ~= 0 and pImgHandle ~= -1 then
+                local paint = nvgImagePattern(ctx, avatarX, avatarY, avatarSize, avatarSize, 0, pImgHandle, 0.5)
+                nvgBeginPath(ctx)
+                nvgRoundedRect(ctx, avatarX, avatarY, avatarSize, avatarSize, 6)
+                nvgFillPaint(ctx, paint)
+                nvgFill(ctx)
+            end
 
             -- 死亡X标记
             local xSize = 10
+            local headCY = avatarY + avatarSize / 2
             nvgBeginPath(ctx)
             nvgMoveTo(ctx, cardCX - xSize, headCY - xSize)
             nvgLineTo(ctx, cardCX + xSize, headCY + xSize)
@@ -6035,18 +6583,6 @@ function drawDefeatScreen(logW, logH)
             nvgLineTo(ctx, cardCX - xSize, headCY + xSize)
             nvgStrokeColor(ctx, nvgRGBA(200, 40, 40, 220))
             nvgStrokeWidth(ctx, 3)
-            nvgStroke(ctx)
-
-            -- 闭眼(死亡表情)
-            local eyeY = headCY - 3
-            local eyeSpacing = headR * 0.35
-            nvgBeginPath(ctx)
-            nvgMoveTo(ctx, cardCX - eyeSpacing - 4, eyeY)
-            nvgLineTo(ctx, cardCX - eyeSpacing + 4, eyeY)
-            nvgMoveTo(ctx, cardCX + eyeSpacing - 4, eyeY)
-            nvgLineTo(ctx, cardCX + eyeSpacing + 4, eyeY)
-            nvgStrokeColor(ctx, nvgRGBA(10, 8, 6, 200))
-            nvgStrokeWidth(ctx, 2)
             nvgStroke(ctx)
 
             -- 玩家编号
