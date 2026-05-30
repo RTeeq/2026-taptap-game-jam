@@ -19,6 +19,10 @@
   "assets": {
     "icon": "",
     "screenshots": [],
-    "promotional_image": ""
+    "promotional_image": "./assets/image/封面.png",
+    "promotional_image_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/封面.png"
+  },
+  "metadata": {
+    "updated_at": "2026-05-30T16:03:49.608Z"
   }
 }

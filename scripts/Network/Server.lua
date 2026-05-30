@@ -434,6 +434,10 @@ function Server.OnSettleElimination()
             p.isGhost = true
             p.vx = 0
             p.vy = 0
+            -- 释放舒适区占用
+            for _, zone in ipairs(comfortZones_) do
+                if zone.occupiedBy == pid then zone.occupiedBy = nil end
+            end
             table.insert(deaths, pid)
             Server.UpdatePlayerNode(pid)
 
@@ -634,11 +638,63 @@ function Server.UpdateAllPlayers(dt)
             p.poison = clamp(p.poison + poisonRate * dt, CONFIG.PoisonMin, CONFIG.PoisonMax)
         end
 
-        -- 舒适区能量回复
-        for _, zone in ipairs(comfortZones_) do
-            if not zone.corrupted and dist(p.x, p.y, zone.x, zone.y) <= CONFIG.ComfortZoneRadius then
-                p.energy = clamp(p.energy + CONFIG.ComfortZoneRegenRate * dt, CONFIG.EnergyMin, CONFIG.EnergyMax)
-                break
+        -- 舒适区站点占领机制(站立3秒占领 → 获得100能量点 → 用完需重新占领)
+        if not p.comfortClaims then p.comfortClaims = {} end
+        local inZone = false
+        for zi, zone in ipairs(comfortZones_) do
+            if zone.corrupted then goto nextZoneSrv end
+            if dist(p.x, p.y, zone.x, zone.y) > CONFIG.ComfortZoneRadius then goto nextZoneSrv end
+            -- 独占检查: 已被其他玩家占用则不能进入
+            if zone.occupiedBy and zone.occupiedBy ~= pid then break end
+
+            inZone = true
+            if not p.comfortClaims[zi] then
+                p.comfortClaims[zi] = { claimed = false, claimTimer = 0, energyLeft = 0 }
+            end
+            local claim = p.comfortClaims[zi]
+
+            -- 判断是否站着不动
+            local isStanding = (math.abs(p.vx) < 0.1 and math.abs(p.vy) < 0.1)
+
+            if claim.claimed and claim.energyLeft > 0 then
+                -- 已占领且有剩余能量 → 持续回复
+                zone.occupiedBy = pid
+                p.isCapturingZone = false
+                local regenAmount = CONFIG.ComfortZoneRegenRate * dt
+                local actualRegen = math.min(regenAmount, claim.energyLeft)
+                p.energy = clamp(p.energy + actualRegen, CONFIG.EnergyMin, CONFIG.EnergyMax)
+                claim.energyLeft = claim.energyLeft - actualRegen
+
+                if claim.energyLeft <= 0 then
+                    claim.claimed = false
+                    claim.energyLeft = 0
+                    zone.occupiedBy = nil
+                end
+            elseif not claim.claimed then
+                -- 未占领 → 需要站立3秒占领
+                zone.occupiedBy = pid
+                p.isCapturingZone = true
+                p.currentComfortZoneIdx = zi
+                if isStanding then
+                    claim.claimTimer = claim.claimTimer + dt
+                    if claim.claimTimer >= CONFIG.ComfortZoneWaitTime then
+                        claim.claimed = true
+                        claim.energyLeft = CONFIG.ComfortZoneClaimEnergy
+                        p.isCapturingZone = false
+                    end
+                else
+                    claim.claimTimer = 0
+                    p.isCapturingZone = false
+                end
+            end
+            break
+            ::nextZoneSrv::
+        end
+        -- 离开舒适区时释放占用
+        if not inZone then
+            p.isCapturingZone = false
+            for _, zone in ipairs(comfortZones_) do
+                if zone.occupiedBy == pid then zone.occupiedBy = nil end
             end
         end
 
@@ -648,6 +704,10 @@ function Server.UpdateAllPlayers(dt)
             p.isGhost = true
             p.vx = 0
             p.vy = 0
+            -- 释放舒适区占用
+            for _, zone in ipairs(comfortZones_) do
+                if zone.occupiedBy == pid then zone.occupiedBy = nil end
+            end
             Server.UpdatePlayerNode(pid)
 
             local deathData = VariantMap()
@@ -782,6 +842,17 @@ function Server.ResolveAttackHit(attacker)
                     Server.InterruptDrinking(target, attacker.id)
                     -- 打断交互
                     Server.InterruptInteract(target)
+                    -- 打断舒适区占领
+                    if target.isCapturingZone then
+                        target.isCapturingZone = false
+                        local zi = target.currentComfortZoneIdx
+                        if zi and target.comfortClaims and target.comfortClaims[zi] then
+                            target.comfortClaims[zi].claimTimer = 0
+                        end
+                        for _, zone in ipairs(comfortZones_) do
+                            if zone.occupiedBy == pid then zone.occupiedBy = nil end
+                        end
+                    end
 
                     -- 广播命中事件
                     local hitData = VariantMap()

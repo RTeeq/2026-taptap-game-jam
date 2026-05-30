@@ -35,9 +35,10 @@ local CONFIG = {
     InteractCostEnergy = 5,      -- 交互消耗能量(6.1)
     -- 6.3 能量回复
     EnergyStealOnHit = 10,       -- 命中掠夺能量(从对方扣除)
-    ComfortZoneRegenRate = 10,   -- 舒适区内被动回复: 10/秒(10秒回满,需站立不动3秒后)
-    ComfortZoneWaitTime = 3,     -- 需站立不动等待3秒才开始恢复
-    ComfortZoneRadius = 150,     -- 舒适区判定半径(px)
+    ComfortZoneRegenRate = 50,   -- 舒适区占领后回复速率: 50/秒
+    ComfortZoneWaitTime = 3,     -- 需站立不动等待3秒才能占领成功
+    ComfortZoneRadius = 75,      -- 舒适区判定半径(px) - 缩小为原来的一半
+    ComfortZoneClaimEnergy = 100, -- 每次占领获得的能量配额
     ComfortZoneMinSpawnDist = 300, -- 距任何玩家出生点最小距离
     ComfortZoneSeparation = 400,   -- 多个舒适区之间最小距离
     -- 攻击(4.3)
@@ -60,7 +61,7 @@ local CONFIG = {
     InteractDuration = 3.0,      -- 交互状态持续时间(秒)
     InteractAcceptTimeout = 2.0, -- 接受超时(秒, 默认接受)
     -- 回合(3.3 核心参数)
-    TotalRounds = 20,            -- 最大轮数(安全上限)
+    TotalRounds = 5,             -- 总天数(5天)
     PrepareDuration = 10,        -- 准备阶段(仅开局一次)
     DayDuration = 60,            -- 白天阶段(主要战斗时间)
     NightfallDuration = 5,       -- 黑夜降临(黑屏+5秒倒计时)
@@ -92,6 +93,7 @@ local eliminatedIdx = -1    -- 本轮被淘汰的玩家索引
 local settleDeaths = {}     -- 结算阶段死亡的玩家索引列表
 local settleSubPhase = "countdown"  -- "countdown"(5s黑屏倒计时) / "elimination"(3s淘汰展示)
 local countdownLastSecond = -1      -- 倒计时音效追踪(每秒播放一次)
+local backToMenuBtnRect = { x = 0, y = 0, w = 0, h = 0 }  -- 返回主页按钮点击区域
 local isFirstRound = true   -- 是否第一轮(准备阶段标记)
 local victoryWinnerIdx = nil -- 胜利玩家索引(最后存活者)
 local victoryPotionGiven = false -- 是否已发放胜利药水
@@ -254,10 +256,11 @@ local function createPlayer(idx, x, y, isLocal)
         interactGiveType = nil,   -- 正在给予的物品类型: "antidote"/"poison"
         interactReceived = nil,   -- 收到的物品: "antidote"/"poison"
         interactFlyAnim = nil,    -- 抛物线动画 {t, duration, fromX, fromY, toX, toY, type}
-        -- 舒适区
+        -- 舒适区(站点占领机制)
         comfortStandTimer = 0,  -- 在舒适区站立不动的累计时间
-        usingComfortZone = false, -- 是否正在使用舒适区(恢复中,免疫攻击)
-        usedComfortZones = {},  -- {[zoneIdx]=消耗量} 每个玩家对每个舒适区独立累计,满100不可再用
+        usingComfortZone = false, -- 是否正在使用舒适区(已占领,恢复中)
+        isCapturingZone = false,  -- 是否正在占领中(等待3秒)
+        comfortClaims = {},  -- {[zoneIdx]={claimed=bool, claimTimer=n, energyLeft=n}} 每个玩家对每个舒适区的占领状态
         -- 视觉
         color = {0, 0, 0},
         hitFlash = 0,
@@ -282,20 +285,82 @@ local PLAYER_COLORS = {
 -- 猪角色图片路径(5个角色)
 local PIG_IMAGE_PATHS = {
     "image/Image 16.png",        -- 小丑猪
-    "image/Image 13 (4).png",    -- 部落战士猪
-    "image/Image 11 (6).png",    -- 疯狂科学家猪
-    "image/Image 12 (4).png",    -- 矿工猪
-    "image/Image 11 (5).png",    -- 盗贼猪
+    "image/pig_warrior.png",     -- 战士猪
+    "image/pig_scientist.png",   -- 科学家猪
+    "image/pig_miner.png",       -- 矿工猪
+    "image/pig_thief.png",       -- 盗贼猪
 }
 local pigImages = {}  -- nvgCreateImage 返回的句柄数组
 local GHOST_IMAGE_PATH = "image/Image 17.png"
 local ghostImage = nil  -- 鬼魂图片句柄
+local potionNvgImages = {}  -- {victory=handle, antidote=handle, poison=handle}
+local POTION_IMAGE_PATHS = {
+    victory = "image/游戏道具/胜利药水.png",
+    antidote = "image/游戏道具/解药.png",
+    poison = "image/游戏道具/毒药.png",
+}
+
+-- 关卡编辑器
+local LevelEditor = require("TileMap.LevelEditor")
+---@type table|nil
+local levelEditor = nil  -- 在 Start() 中初始化
+local editorSpawnConfig = nil  -- 编辑器出生点配置(应用后生效)
+
+-- 地形贴图(饥荒风格)
+local TERRAIN_PATHS = {
+    -- 基础地形
+    grass       = "image/地皮/terrain_grass_20260530170030.png",
+    swamp       = "image/地皮/terrain_swamp_20260530165947.png",
+    mud         = "image/地皮/terrain_mud_20260530165944.png",
+    rocky       = "image/地皮/terrain_rocky_20260530165943.png",
+    volcanic    = "image/地皮/terrain_volcanic_20260530165940.png",
+    dead_grass  = "image/地皮/terrain_dead_grass_20260530170619.png",
+    forest      = "image/地皮/terrain_forest_floor_20260530170620.png",
+    sand        = "image/地皮/terrain_sand_20260530170620.png",
+    snow        = "image/地皮/terrain_snow_20260530170624.png",
+    cobblestone = "image/地皮/terrain_cobblestone_20260530170621.png",
+    -- 过渡贴图(左右)
+    grass_sand_lr      = "image/地皮/terrain_grass_sand_lr_20260530170624.png",
+    grass_deadgrass_lr = "image/地皮/terrain_grass_deadgrass_lr_20260530170623.png",
+    grass_rocky_lr     = "image/地皮/terrain_grass_rocky_lr_20260530170407.png",
+    grass_swamp_lr     = "image/地皮/terrain_grass_swamp_lr_20260530170402.png",
+    mud_rocky_lr       = "image/地皮/terrain_mud_rocky_lr_20260530170405.png",
+    mud_swamp_lr       = "image/地皮/terrain_mud_swamp_lr_20260530170404.png",
+    -- 过渡贴图(上下)
+    grass_snow_tb      = "image/地皮/terrain_grass_snow_tb_20260530170622.png",
+    grass_rocky_tb     = "image/地皮/terrain_grass_rocky_tb_20260530170412.png",
+    grass_mud_tb       = "image/地皮/terrain_grass_mud_tb_20260530170406.png",
+    mud_swamp_tb       = "image/地皮/terrain_mud_swamp_tb_20260530170405.png",
+    rocky_volcanic_tb  = "image/地皮/terrain_rocky_volcanic_tb_20260530170414.png",
+    -- 角落贴图
+    corner_grass_in_mud_bl      = "image/地皮/terrain_corner_grass_in_mud_bl_20260530170523.png",
+    corner_grass_in_mud_br      = "image/地皮/terrain_corner_grass_in_mud_br_20260530170508.png",
+    corner_grass_in_mud_tl      = "image/地皮/terrain_corner_grass_in_mud_tl_20260530170508.png",
+    corner_grass_in_mud_tr      = "image/地皮/terrain_corner_grass_in_mud_tr_20260530170512.png",
+    corner_grass_in_swamp_tl    = "image/地皮/terrain_corner_grass_in_swamp_tl_20260530170508.png",
+    corner_grass_in_swamp_tr    = "image/地皮/terrain_corner_grass_in_swamp_tr_20260530170508.png",
+    corner_rocky_in_volcanic_tl = "image/地皮/terrain_corner_rocky_in_volcanic_tl_20260530170512.png",
+    corner_rocky_in_volcanic_tr = "image/地皮/terrain_corner_rocky_in_volcanic_tr_20260530170512.png",
+    -- 混合/渐变贴图
+    grass_to_mud       = "image/地皮/terrain_grass_to_mud_20260530165951.png",
+    grass_to_swamp     = "image/地皮/terrain_grass_to_swamp_20260530165942.png",
+    rocky_to_volcanic  = "image/地皮/terrain_rocky_to_volcanic_20260530165943.png",
+}
+local terrainImages = {}  -- { name = nvgImageHandle }
 
 local function initPlayers()
     players = {}
-    local cx = CONFIG.MapSize / 2
-    local cy = CONFIG.MapSize / 2
-    local spawnRadius = CONFIG.MapSize * 0.35
+    -- 编辑器出生点配置优先
+    local cx, cy, spawnRadius
+    if editorSpawnConfig then
+        cx = editorSpawnConfig.cx
+        cy = editorSpawnConfig.cy
+        spawnRadius = editorSpawnConfig.radius
+    else
+        cx = CONFIG.MapSize / 2
+        cy = CONFIG.MapSize / 2
+        spawnRadius = CONFIG.MapSize * 0.35
+    end
 
     -- 随机打乱角色图片分配(Fisher-Yates shuffle)
     local avatarOrder = {}
@@ -636,17 +701,17 @@ local function enterShrinking()
         end
     end
 
-    -- 在新安全区内补充新舒适区
-    -- 第5轮及以后不刷新舒适区; 第4轮只刷1个; 其他轮补到3个
+    -- 在新安全区内补充新舒适区(反转机制: 前期少, 后期多)
+    -- 第1轮不刷新; 第2轮只刷1个; 第3轮及以后补到3个
     local maxZonesThisRound = 3
-    if currentRound >= 5 then
+    if currentRound <= 1 then
         maxZonesThisRound = 0
-    elseif currentRound == 4 then
+    elseif currentRound == 2 then
         maxZonesThisRound = 1
     end
 
-    -- 每轮初始使用次数递减: 第1轮5次, 第2轮4次, 第3轮3次, 第4轮2次, 第5轮1次
-    local roundUses = math.max(1, 6 - currentRound)
+    -- 每轮初始使用次数递增: 第1轮1次, 第2轮2次, 第3轮3次, 第4轮4次, 第5轮5次
+    local roundUses = math.min(5, currentRound)
 
     local activeCount = 0
     for _, zone in ipairs(comfortZones) do
@@ -723,6 +788,7 @@ local function resolveAttackHit(attacker)
 
     for i = 1, #players do
         local target = players[i]
+        -- 已占领并使用中的玩家免疫攻击, 但正在占领中(isCapturingZone)的可以被打
         if target.idx ~= attacker.idx and target.alive and not target.usingComfortZone then
             local d = dist(attacker.x, attacker.y, target.x, target.y)
             if d <= CONFIG.AttackRange then
@@ -750,6 +816,24 @@ local function resolveAttackHit(attacker)
 
                     -- 8.4 检查是否打断交互
                     interruptInteract(target)
+
+                    -- 打断舒适区占领(正在占领中的玩家被攻击,重置占领进度)
+                    if target.isCapturingZone then
+                        target.isCapturingZone = false
+                        target.comfortStandTimer = 0
+                        local zi = target.currentComfortZoneIdx
+                        if zi and target.comfortClaims and target.comfortClaims[zi] then
+                            target.comfortClaims[zi].claimTimer = 0
+                        end
+                        if target.isLocal then
+                            table.insert(floatingTexts, {
+                                x = target.x, y = target.y - 50,
+                                text = "占领被打断!",
+                                color = {255, 100, 100},
+                                timer = 1.0, maxTimer = 1.0,
+                            })
+                        end
+                    end
 
                     -- 状态特效: 目标中毒, 攻击者减毒
                     table.insert(statusEffects, { playerIdx = target.idx, type = "poison", timer = 1.0 })
@@ -1565,14 +1649,10 @@ local function updateAI(p, dt)
     local nearestZone = nil
     for zi, zone in ipairs(comfortZones) do
         if not zone.corrupted then
-            -- 检查AI是否已使用过该舒适区
-            local usedByMe = false
-            if p.usedComfortZones then
-                for _, usedZi in ipairs(p.usedComfortZones) do
-                    if usedZi == zi then usedByMe = true; break end
-                end
-            end
-            if not usedByMe then
+            -- 检查AI是否已占领并耗尽该舒适区
+            local claim = p.comfortClaims and p.comfortClaims[zi]
+            local depleted = claim and claim.claimed and claim.energyLeft <= 0
+            if not depleted then
                 local d = dist(p.x, p.y, zone.x, zone.y)
                 if d < nearestZoneDist then
                     nearestZoneDist = d
@@ -1764,11 +1844,14 @@ local function updatePlayers(dt)
 
         -- 7.2 舒适区能量回复(10/秒, 10秒回满, 需站立不动3秒后) - 9.4 失效区不回复
         -- 新增: 舒适区有自身能量条(100), 消耗完进入5秒冷却, 每个舒适区只能用5次
-        -- 新增: 玩家使用过的舒适区不能再次使用(usedComfortZones记录)
+        -- 舒适区站点占领机制
         local wasInComfort = p.inComfortZone
         p.inComfortZone = false
         if p.usedZoneHintCD and p.usedZoneHintCD > 0 then p.usedZoneHintCD = p.usedZoneHintCD - dt end
         local isStanding = (p.vx == 0 and p.vy == 0)  -- 必须站着不动
+        if not p.comfortClaims then p.comfortClaims = {} end
+        p.isCapturingZone = false  -- 每帧重置
+        p.currentComfortZoneIdx = nil  -- 当前所在舒适区索引
         for zi, zone in ipairs(comfortZones) do
             -- 跳过腐败/耗尽/冷却中的舒适区
             local zoneAvailable = not zone.corrupted
@@ -1777,16 +1860,21 @@ local function updatePlayers(dt)
                 and (zone.zoneEnergy or 100) > 0
             if not zoneAvailable then goto nextZone end
 
-            -- 检查该玩家是否已消耗完此舒适区的一个点数(累计>=100)
-            local consumed = (p.usedComfortZones and p.usedComfortZones[zi]) or 0
-            if consumed >= 100 then
-                -- 本地玩家进入已用完的舒适区时给出提示(每3秒最多一次)
+            -- 初始化该玩家对此舒适区的占领记录
+            if not p.comfortClaims[zi] then
+                p.comfortClaims[zi] = { claimed = false, claimTimer = 0, energyLeft = 0 }
+            end
+            local claim = p.comfortClaims[zi]
+
+            -- 检查该玩家是否已占领并耗尽此舒适区能量
+            if claim.claimed and claim.energyLeft <= 0 then
+                -- 本地玩家进入已耗尽的舒适区时给出提示
                 if p.isLocal and dist(p.x, p.y, zone.x, zone.y) <= CONFIG.ComfortZoneRadius then
                     if not p.usedZoneHintCD or p.usedZoneHintCD <= 0 then
                         p.usedZoneHintCD = 3.0
                         table.insert(floatingTexts, {
                             x = p.x, y = p.y - 40,
-                            text = "此舒适区已用完,请前往其他舒适区",
+                            text = "此舒适区能量已耗尽,请前往其他舒适区",
                             color = {200, 150, 80},
                             timer = 1.5, maxTimer = 1.5,
                         })
@@ -1812,47 +1900,41 @@ local function updatePlayers(dt)
                     goto nextZone
                 end
                 p.inComfortZone = true
+                p.currentComfortZoneIdx = zi
                 if not wasInComfort and p.isLocal then playSound("sfx_comfort_zone_enter", 0.4) end
-                if isStanding then
-                    -- 累计站立时间，达到3秒后才开始恢复
-                    p.comfortStandTimer = p.comfortStandTimer + dt
-                    -- 站满等待时间后标记占用
-                    if p.comfortStandTimer >= CONFIG.ComfortZoneWaitTime then
-                        zone.occupiedBy = p.idx
-                        p.usingComfortZone = true
-                    end
-                    if p.comfortStandTimer >= CONFIG.ComfortZoneWaitTime and p.energy < CONFIG.EnergyMax then
-                        -- 消耗舒适区能量来恢复玩家能量
+
+                -- 已占领且有剩余能量 → 直接使用(无需等待)
+                if claim.claimed and claim.energyLeft > 0 then
+                    zone.occupiedBy = p.idx
+                    p.usingComfortZone = true
+                    if p.energy < CONFIG.EnergyMax then
                         local regenAmount = CONFIG.ComfortZoneRegenRate * dt
-                        local zoneConsume = regenAmount  -- 舒适区消耗与恢复量1:1
-                        zoneConsume = math.min(zoneConsume, zone.zoneEnergy)
-                        -- 限制不超过该玩家对此舒适区的剩余配额(每人最多消耗100)
-                        local curConsumed = (p.usedComfortZones and p.usedComfortZones[zi]) or 0
-                        local remaining = 100 - curConsumed
-                        zoneConsume = math.min(zoneConsume, remaining)
-                        regenAmount = math.min(regenAmount, zoneConsume)
+                        local actualRegen = math.min(regenAmount, claim.energyLeft)
+                        actualRegen = math.min(actualRegen, zone.zoneEnergy)
 
                         local prevEnergy = p.energy
-                        p.energy = clamp(p.energy + regenAmount, CONFIG.EnergyMin, CONFIG.EnergyMax)
-                        zone.zoneEnergy = zone.zoneEnergy - zoneConsume
+                        p.energy = clamp(p.energy + actualRegen, CONFIG.EnergyMin, CONFIG.EnergyMax)
+                        claim.energyLeft = claim.energyLeft - actualRegen
+                        zone.zoneEnergy = zone.zoneEnergy - actualRegen
 
-                        -- 累计该玩家对此舒适区的消耗量(每个玩家独立)
-                        if not p.usedComfortZones then p.usedComfortZones = {} end
-                        p.usedComfortZones[zi] = (p.usedComfortZones[zi] or 0) + zoneConsume
-                        -- 消耗满100 → 该玩家不能再用此舒适区
-                        if p.usedComfortZones[zi] >= 100 then
-                            p.usedComfortZones[zi] = 100
+                        -- 能量配额耗尽 → 需要重新占领
+                        if claim.energyLeft <= 0 then
+                            claim.energyLeft = 0
+                            claim.claimed = false
+                            claim.claimTimer = 0
+                            zone.occupiedBy = nil
+                            p.usingComfortZone = false
                             if p.isLocal then
                                 table.insert(floatingTexts, {
                                     x = p.x, y = p.y - 50,
-                                    text = "此舒适区点数已用完!",
+                                    text = "能量配额已用完,需重新占领!",
                                     color = {255, 200, 100},
                                     timer = 1.5, maxTimer = 1.5,
                                 })
                             end
                         end
 
-                        -- 舒适区能量耗尽 → 进入5秒冷却
+                        -- 舒适区总能量耗尽 → 进入5秒冷却
                         if zone.zoneEnergy <= 0 then
                             zone.zoneEnergy = 0
                             zone.zoneCooldown = 5.0
@@ -1873,21 +1955,46 @@ local function updatePlayers(dt)
                             })
                         end
                     end
-                else
-                    -- 移动了，重置等待计时并释放占用
-                    if p.usingComfortZone then
-                        zone.occupiedBy = nil
-                        p.usingComfortZone = false
+                -- 未占领 → 需要站立等待3秒占领
+                elseif not claim.claimed then
+                    if isStanding then
+                        claim.claimTimer = claim.claimTimer + dt
+                        p.isCapturingZone = true  -- 标记正在占领(可被攻击打断)
+                        p.comfortStandTimer = claim.claimTimer  -- 同步给UI显示
+
+                        -- 占领成功!
+                        if claim.claimTimer >= CONFIG.ComfortZoneWaitTime then
+                            claim.claimed = true
+                            claim.energyLeft = CONFIG.ComfortZoneClaimEnergy
+                            claim.claimTimer = 0
+                            zone.occupiedBy = p.idx
+                            p.usingComfortZone = true
+                            p.isCapturingZone = false
+                            if p.isLocal then
+                                playSound("sfx_comfort_zone_enter", 0.6)
+                                table.insert(floatingTexts, {
+                                    x = p.x, y = p.y - 50,
+                                    text = "占领成功! +100能量配额",
+                                    color = {80, 255, 80},
+                                    timer = 1.5, maxTimer = 1.5,
+                                })
+                            end
+                        end
+                    else
+                        -- 移动了，重置占领计时
+                        claim.claimTimer = 0
+                        p.comfortStandTimer = 0
+                        p.isCapturingZone = false
                     end
-                    p.comfortStandTimer = 0
                 end
                 break
             end
             ::nextZone::
         end
-        -- 不在舒适区时重置计时并释放占用
+        -- 不在舒适区时重置状态并释放占用
         if not p.inComfortZone then
             p.comfortStandTimer = 0
+            p.isCapturingZone = false
             if p.usingComfortZone then
                 -- 释放之前占用的舒适区
                 for _, z in ipairs(comfortZones) do
@@ -2287,6 +2394,37 @@ function Start()
         print("Loaded ghost image: " .. GHOST_IMAGE_PATH)
     end
 
+    -- 加载药水图标图片(用于NanoVG手机端道具按钮和头顶指示器)
+    for key, path in pairs(POTION_IMAGE_PATHS) do
+        local img = nvgCreateImage(nvgContext, path, 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load potion image: " .. path)
+            potionNvgImages[key] = nil
+        else
+            potionNvgImages[key] = img
+            print("Loaded potion image: " .. key .. " -> " .. path)
+        end
+    end
+
+    -- 加载地形贴图(NVG_IMAGE_REPEATX | NVG_IMAGE_REPEATY = 1|2 = 3)
+    for name, path in pairs(TERRAIN_PATHS) do
+        local img = nvgCreateImage(nvgContext, path, 3)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load terrain: " .. path)
+            terrainImages[name] = nil
+        else
+            terrainImages[name] = img
+            print("Loaded terrain: " .. name)
+        end
+    end
+
+    -- 初始化关卡编辑器
+    levelEditor = LevelEditor.New(nvgContext, {
+        mapPixelSize = CONFIG.MapSize,
+        camera = camera,
+        circle = circle,
+    })
+
     -- 初始化UI
     InitGameUI()
 
@@ -2301,6 +2439,7 @@ function Start()
     SubscribeToEvent(nvgContext, "NanoVGRender", "HandleRender")
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent("MouseButtonDown", "HandleMouseDown")
+    SubscribeToEvent("MouseButtonUp", "HandleMouseUp")
     SubscribeToEvent("KeyDown", "HandleKeyDown")
     SubscribeToEvent("TouchBegin", "HandleTouchBegin")
     SubscribeToEvent("TouchEnd", "HandleTouchEnd")
@@ -2363,42 +2502,38 @@ function CreateMenuPanel()
         id = "menuPanel",
         position = "absolute",
         top = 0, left = 0, right = 0, bottom = 0,
-        justifyContent = "center",
+        justifyContent = "flex-end",
         alignItems = "center",
-        backgroundColor = { 10, 5, 20, 220 },
+        backgroundImage = "image/封面.png",
+        backgroundFit = "cover",
+        onClick = function(self)
+            startGame()
+        end,
         children = {
             UI.Panel {
-                width = 320,
-                padding = 32,
-                gap = 16,
-                backgroundColor = { 20, 10, 35, 240 },
-                borderRadius = 16,
-                borderWidth = 2,
-                borderColor = { 120, 0, 200, 150 },
+                marginBottom = 40,
+                padding = 16,
+                gap = 6,
+                backgroundColor = { 0, 0, 0, 160 },
+                borderRadius = 12,
                 alignItems = "center",
                 children = {
                     UI.Label {
-                        text = "道友请留步",
-                        fontSize = 28,
-                        fontColor = { 200, 100, 255, 255 },
-                    },
-                    UI.Label {
                         text = "永夜森林的生存法则",
                         fontSize = 14,
-                        fontColor = { 150, 150, 180, 200 },
+                        fontColor = { 200, 200, 220, 230 },
                     },
                     UI.Label {
                         text = "WASD移动 | 鼠标左键攻击\nTAB打开背包 | 攻击传毒求生\n手柄: 左摇杆移动 右摇杆瞄准 A攻击",
                         fontSize = 12,
-                        fontColor = { 120, 120, 150, 180 },
+                        fontColor = { 160, 160, 180, 200 },
+                        textAlign = "center",
                     },
-                    UI.Button {
-                        text = "开始游戏",
-                        variant = "primary",
-                        marginTop = 8,
-                        onClick = function(self)
-                            startGame()
-                        end,
+                    UI.Label {
+                        text = "点击任意位置开始",
+                        fontSize = 12,
+                        fontColor = { 150, 150, 170, 180 },
+                        marginTop = 6,
                     },
                 }
             }
@@ -2439,7 +2574,7 @@ function CreateHUDPanel()
                 alignItems = "flex-end",
                 pointerEvents = "none",
                 children = {
-                    UI.Label { id = "roundLabel", text = "第 1 轮", fontSize = 14, fontColor = { 255, 220, 100, 255 } },
+                    UI.Label { id = "roundLabel", text = "剩余 5 天", fontSize = 14, fontColor = { 255, 220, 100, 255 } },
                     UI.Label { id = "timerLabel", text = "", fontSize = 20, fontColor = { 255, 80, 80, 255 } },
                     UI.Label { id = "aliveLabel", text = "存活: 6", fontSize = 12, fontColor = { 200, 200, 200, 200 } },
                 },
@@ -2488,7 +2623,7 @@ function CreateInventoryPanel()
                     -- 药剂图标槽
                     UI.Panel {
                         id = "invSlot",
-                        width = 64, height = 64,
+                        width = 80, height = 80,
                         justifyContent = "center",
                         alignItems = "center",
                         backgroundColor = { 40, 30, 60, 200 },
@@ -2496,6 +2631,12 @@ function CreateInventoryPanel()
                         borderWidth = 2,
                         borderColor = { 80, 50, 140, 200 },
                         children = {
+                            UI.Panel {
+                                id = "invPotionIcon",
+                                width = 64, height = 64,
+                                visible = false,
+                                backgroundFit = "contain",
+                            },
                             UI.Label {
                                 id = "invItemLabel",
                                 text = "无药剂",
@@ -2585,6 +2726,7 @@ function updateInventoryUI()
     if not p then return end
 
     local itemLabel = uiRoot_:FindById("invItemLabel")
+    local potionIcon = uiRoot_:FindById("invPotionIcon")
     local drinkAntidoteBtn = uiRoot_:FindById("drinkAntidoteBtn")
     local drinkPoisonBtn = uiRoot_:FindById("drinkPoisonBtn")
     local desc = uiRoot_:FindById("invDesc")
@@ -2596,6 +2738,18 @@ function updateInventoryUI()
     -- 按钮不可用条件: 正在喝药/硬直/攻击中/能量不足(胜利药水不检查能量)
     local cantDrink = isDrinking or isStunned or isAttacking
     local cantDrinkNormal = cantDrink or noEnergy
+
+    -- 显示/隐藏药水图标
+    if p.potionState and POTION_IMAGE_PATHS[p.potionState] then
+        if potionIcon then
+            potionIcon:SetBackgroundImage(POTION_IMAGE_PATHS[p.potionState])
+            potionIcon:SetVisible(true)
+        end
+        if itemLabel then itemLabel:SetVisible(false) end
+    else
+        if potionIcon then potionIcon:SetVisible(false) end
+        if itemLabel then itemLabel:SetVisible(true) end
+    end
 
     if p.potionState == "victory" then
         if itemLabel then itemLabel:SetText("胜利药水") end
@@ -2680,7 +2834,8 @@ function updateHUD()
         elseif gamePhase == "shrinking" then
             phaseText = " [缩圈]"
         end
-        roundLabel:SetText("第 " .. currentRound .. " 轮" .. phaseText)
+        local remainDays = CONFIG.TotalRounds - currentRound + 1
+        roundLabel:SetText("剩余 " .. remainDays .. " 天" .. phaseText)
     end
     local timerLabel = uiRoot_:FindById("timerLabel")
     if timerLabel then
@@ -2704,6 +2859,13 @@ end
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
+
+    -- 关卡编辑器更新(激活时拦截游戏输入)
+    if levelEditor and levelEditor:IsActive() then
+        local dpr = graphics:GetDPR()
+        levelEditor:Update(dt, input, dpr)
+        return  -- 编辑器激活时暂停游戏逻辑
+    end
 
     -- 10.2 毒值警告cooldown
     if poisonWarnCooldown > 0 then poisonWarnCooldown = poisonWarnCooldown - dt end
@@ -2944,7 +3106,26 @@ end
 function HandleMouseDown(eventType, eventData)
     local button = eventData["Button"]:GetInt()
 
+    -- 编辑器激活时拦截鼠标
+    if levelEditor and levelEditor:IsActive() then
+        levelEditor:HandleMouseDown(button)
+        return
+    end
+
     if button == MOUSEB_LEFT then
+        -- 胜利/失败画面: 检测返回主页按钮点击
+        if gamePhase == "victory" or gamePhase == "defeat" then
+            local graphics = GetGraphics()
+            local dpr = graphics:GetDPR()
+            local mx = input:GetMousePosition().x / dpr
+            local my = input:GetMousePosition().y / dpr
+            local r = backToMenuBtnRect
+            if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+                backToMenu()
+            end
+            return
+        end
+
         if gamePhase == "day" then
             if not inventoryOpen then
                 local p = players[localPlayerIdx]
@@ -2961,10 +3142,38 @@ function HandleMouseDown(eventType, eventData)
     end
 end
 
+function HandleMouseUp(eventType, eventData)
+    local button = eventData["Button"]:GetInt()
+    if levelEditor and levelEditor:IsActive() then
+        levelEditor:HandleMouseUp(button)
+    end
+end
+
 ---@param eventType string
 ---@param eventData KeyDownEventData
 function HandleKeyDown(eventType, eventData)
     local key = eventData["Key"]:GetInt()
+
+    -- F3 键: 切换关卡编辑器
+    if key == KEY_F3 then
+        if levelEditor then
+            local isOpen = levelEditor:Toggle()
+            print(isOpen and "[编辑器] 已打开 - Tab切模式, Enter应用" or "[编辑器] 已关闭")
+            -- 隐藏/显示游戏UI组件
+            if uiRoot_ then
+                local hud = uiRoot_:FindById("hudPanel")
+                if hud then hud:SetVisible(not isOpen) end
+                local inv = uiRoot_:FindById("inventoryPanel")
+                if inv then inv:SetVisible(false) end
+            end
+        end
+        return
+    end
+
+    -- 编辑器激活时, 优先处理编辑器按键
+    if levelEditor and levelEditor:IsActive() then
+        if levelEditor:HandleKeyDown(key) then return end
+    end
 
     if key == KEY_TAB then
         if gamePhase ~= "menu" and gamePhase ~= "victory" then
@@ -3053,22 +3262,24 @@ end
 -- 获取触控按钮区域(基于屏幕逻辑尺寸)
 local function getTouchButtonRects(logW, logH)
     local btnSize = 60
+    local itemBtnSize = 120  -- 道具按钮放大两倍
     local margin = 20
     local bottomY = logH - margin - btnSize
-    -- 右侧: 攻击按钮(右下) + 道具按钮(攻击上方)
+    -- 右侧: 攻击按钮(右下) + 道具按钮(攻击上方, 放大两倍)
     local rightX = logW - margin - btnSize
+    local itemRightX = logW - margin - itemBtnSize
     -- 奔跑按钮(攻击按钮左侧)
     local sprintX = rightX - btnSize - 12
     local sprintY = bottomY
     -- 交换药水按钮(道具按钮左侧)
-    local interactX = rightX - btnSize - 12
-    local interactY = bottomY - btnSize - 15
+    local interactX = itemRightX - btnSize - 12
+    local interactY = bottomY - itemBtnSize - 15
     -- 拒绝交换按钮(交换按钮左侧)
     local rejectX = interactX - btnSize - 8
     local rejectY = interactY
     return {
         attack = { x = rightX, y = bottomY, w = btnSize, h = btnSize },
-        item = { x = rightX, y = bottomY - btnSize - 15, w = btnSize, h = btnSize },
+        item = { x = itemRightX, y = bottomY - itemBtnSize - 15, w = itemBtnSize, h = itemBtnSize },
         sprint = { x = sprintX, y = sprintY, w = btnSize, h = btnSize },
         interact = { x = interactX, y = interactY, w = btnSize, h = btnSize },
         reject = { x = rejectX, y = rejectY, w = btnSize, h = btnSize },
@@ -3093,6 +3304,15 @@ function HandleTouchBegin(eventType, eventData)
     local logH = graphics:GetHeight() / dpr
     local tx = rawX / dpr
     local ty = rawY / dpr
+
+    -- 胜利/失败画面: 检测返回主页按钮点击
+    if gamePhase == "victory" or gamePhase == "defeat" then
+        local r = backToMenuBtnRect
+        if tx >= r.x and tx <= r.x + r.w and ty >= r.y and ty <= r.y + r.h then
+            backToMenu()
+        end
+        return
+    end
 
     -- 检查是否点击了右侧按钮
     local rects = getTouchButtonRects(logW, logH)
@@ -3259,6 +3479,22 @@ local mapDecorations = {}  -- 环境装饰物(树、石头、草丛)
 local groundPatches = {}   -- 地面斑块(草地纹理碎片)
 local decorationsGenerated = false
 
+-- 编辑器应用时重置装饰生成标记(允许重新生成)
+function ResetDecorations()
+    decorationsGenerated = false
+    mapDecorations = {}
+    groundPatches = {}
+end
+
+-- 全局访问函数(供编辑器直接修改真实游戏数据)
+function GetMapDecorations()
+    return mapDecorations
+end
+
+function GetComfortZones()
+    return comfortZones
+end
+
 -- 简单hash函数用于程序化生成(确定性随机)
 local function hashPos(x, y, seed)
     local h = (x * 374761393 + y * 668265263 + seed * 1274126177) % 2147483647
@@ -3278,7 +3514,7 @@ local function generateMapDecorations()
             if h > 0.25 then
                 local px = gx + (hashPos(gx, gy, 100) - 0.5) * patchSpacing
                 local py = gy + (hashPos(gx, gy, 200) - 0.5) * patchSpacing
-                local size = 6 + hashPos(gx, gy, 300) * 14
+                local size = 12 + hashPos(gx, gy, 300) * 28
                 local variant = math.floor(hashPos(gx, gy, 400) * 4) -- 0-3种草丛样式
                 local shade = hashPos(gx, gy, 500) -- 色调变化
                 table.insert(groundPatches, {
@@ -3296,7 +3532,7 @@ local function generateMapDecorations()
             if h > 0.6 then
                 local tx = gx + (hashPos(gx, gy, 800) - 0.5) * treeSpacing * 0.7
                 local ty = gy + (hashPos(gx, gy, 900) - 0.5) * treeSpacing * 0.7
-                local height = 60 + hashPos(gx, gy, 1000) * 80
+                local height = 120 + hashPos(gx, gy, 1000) * 160
                 local twist = (hashPos(gx, gy, 1100) - 0.5) * 0.6
                 local branches = 2 + math.floor(hashPos(gx, gy, 1200) * 4)
                 table.insert(mapDecorations, {
@@ -3317,7 +3553,7 @@ local function generateMapDecorations()
             if h > 0.55 then
                 local rx = gx + (hashPos(gx, gy, 1600) - 0.5) * rockSpacing * 0.6
                 local ry = gy + (hashPos(gx, gy, 1700) - 0.5) * rockSpacing * 0.6
-                local size = 8 + hashPos(gx, gy, 1800) * 18
+                local size = 16 + hashPos(gx, gy, 1800) * 36
                 table.insert(mapDecorations, {
                     type = "rock",
                     x = rx, y = ry, size = size,
@@ -3331,6 +3567,14 @@ local function generateMapDecorations()
     comfortZones = {}
     comfortFloats = {}
     generateComfortZones(CONFIG.MapSize / 2, CONFIG.MapSize / 2, circleInitRadius)
+
+    -- 编辑器出生点配置同步(编辑器直接修改 mapDecorations/comfortZones 引用)
+    if levelEditor then
+        local spawnCfg = levelEditor:GetSpawnConfig()
+        if spawnCfg then
+            editorSpawnConfig = spawnCfg
+        end
+    end
 
     -- 按Y坐标排序(简单深度排序)
     table.sort(mapDecorations, function(a, b) return a.y < b.y end)
@@ -3382,8 +3626,11 @@ function HandleRender(eventType, eventData)
         shakeOX = (math.random() - 0.5) * 2 * screenShake.intensity
         shakeOY = (math.random() - 0.5) * 2 * screenShake.intensity
     end
-    -- ===== 2x 相机缩放(人物和场景放大2倍, 场景范围不变) =====
+    -- ===== 相机缩放(编辑器激活时使用编辑器缩放, 否则2x) =====
     local CAM_ZOOM = 2.0
+    if levelEditor and levelEditor:IsActive() then
+        CAM_ZOOM = 2.0 * levelEditor.editorZoom
+    end
     local offsetX = logW / 2 / CAM_ZOOM - camera.x + shakeOX
     local offsetY = logH / 2 / CAM_ZOOM - camera.y + shakeOY
 
@@ -3427,40 +3674,40 @@ function HandleRender(eventType, eventData)
     -- 恢复缩放变换(后续HUD在屏幕空间绘制)
     nvgRestore(nvgContext)
 
-    -- 7. 暗角效果(Vignette)
-    drawVignette(logW, logH)
+    -- 编辑器激活时: 跳过所有游戏UI, 只渲染编辑器覆盖
+    if levelEditor and levelEditor:IsActive() then
+        levelEditor:Render(logW, logH, dpr)
+    else
+        -- 7. 暗角效果(Vignette)
+        drawVignette(logW, logH)
 
-    -- 7.5 黑夜亮度下降(settle阶段全黑)
-    if gamePhase == "settle" then
-        nvgBeginPath(nvgContext)
-        nvgRect(nvgContext, 0, 0, logW, logH)
-        nvgFillColor(nvgContext, nvgRGBA(0, 0, 0, 255))  -- 全黑覆盖
-        nvgFill(nvgContext)
-    end
+        -- 7.5 黑夜亮度下降(settle阶段全黑)
+        if gamePhase == "settle" then
+            nvgBeginPath(nvgContext)
+            nvgRect(nvgContext, 0, 0, logW, logH)
+            nvgFillColor(nvgContext, nvgRGBA(0, 0, 0, 255))
+            nvgFill(nvgContext)
+        end
 
-    -- settle阶段: 倒计时子阶段只显示5秒倒计时, 淘汰子阶段显示死亡列表
-    if gamePhase == "settle" and settleSubPhase == "countdown" then
-        drawClockCountdown(logW, logH)
-        drawPhaseHint(logW, logH)
-    elseif gamePhase == "settle" and settleSubPhase == "elimination" then
-        -- 7.6 淘汰页面(显示本轮死亡玩家)
-        drawEliminationPage(logW, logH)
-        drawPhaseHint(logW, logH)
-    elseif gamePhase ~= "settle" then
-        -- 正常阶段渲染
-        -- 8. 毒药值屏幕边缘绿色液体覆盖(2.5 UI)
-        drawPoisonScreenOverlay(logW, logH)
-        -- 9. 倒计时钟表
-        drawClockCountdown(logW, logH)
-        -- 10. 阶段提示文字
-        drawPhaseHint(logW, logH)
-        -- 10.5 屏幕边缘方向指示标(指向视野外的舒适区和携带解药玩家)
-        drawOffscreenIndicators(logW, logH, offsetX, offsetY, CAM_ZOOM)
-    end
+        -- settle阶段: 倒计时子阶段只显示5秒倒计时, 淘汰子阶段显示死亡列表
+        if gamePhase == "settle" and settleSubPhase == "countdown" then
+            drawClockCountdown(logW, logH)
+            drawPhaseHint(logW, logH)
+        elseif gamePhase == "settle" and settleSubPhase == "elimination" then
+            drawEliminationPage(logW, logH)
+            drawPhaseHint(logW, logH)
+        elseif gamePhase ~= "settle" then
+            -- 正常阶段渲染
+            drawPoisonScreenOverlay(logW, logH)
+            drawClockCountdown(logW, logH)
+            drawPhaseHint(logW, logH)
+            drawOffscreenIndicators(logW, logH, offsetX, offsetY, CAM_ZOOM)
+        end
 
-    -- 11. 触控按钮(手机适配, 仅触控设备显示)
-    if isTouchDevice and gamePhase ~= "menu" and gamePhase ~= "victory" and gamePhase ~= "defeat" then
-        drawTouchControls(logW, logH)
+        -- 11. 触控按钮(手机适配)
+        if isTouchDevice and gamePhase ~= "menu" and gamePhase ~= "victory" and gamePhase ~= "defeat" then
+            drawTouchControls(logW, logH)
+        end
     end
 
     nvgEndFrame(nvgContext)
@@ -3474,70 +3721,84 @@ function drawGroundDST(logW, logH, ox, oy)
     local ctx = nvgContext
     local isDay = (gamePhase == "prepare" or gamePhase == "day" or gamePhase == "shrinking")
 
-    -- 基础地面色: 暗褐腐败草地(饱和度<=40%)
+    -- 基础地面色
     local bgR, bgG, bgB
     if isDay then
-        bgR, bgG, bgB = 38, 34, 26   -- 暗褐腐败色
+        bgR, bgG, bgB = 38, 34, 26
     else
-        bgR, bgG, bgB = 14, 12, 10   -- 极深夜色
+        bgR, bgG, bgB = 14, 12, 10
     end
-
-    -- 填充基础色
     nvgBeginPath(ctx)
     nvgRect(ctx, 0, 0, logW, logH)
     nvgFillColor(ctx, nvgRGBA(bgR, bgG, bgB, 255))
     nvgFill(ctx)
 
-    -- 地面纹理斑块(视野内)
-    local viewLeft = camera.x - logW / 2 - 50
-    local viewRight = camera.x + logW / 2 + 50
-    local viewTop = camera.y - logH / 2 - 50
-    local viewBottom = camera.y + logH / 2 + 50
+    -- 地形贴图铺地(32px chunk, 与世界坐标对齐, 32×32网格)
+    local tileSize = 64
+    local viewLeft = camera.x - logW / 2 - tileSize
+    local viewRight = camera.x + logW / 2 + tileSize
+    local viewTop = camera.y - logH / 2 - tileSize
+    local viewBottom = camera.y + logH / 2 + tileSize
 
-    local chunkSize = 128
-    local startCX = math.floor(viewLeft / chunkSize) * chunkSize
-    local startCY = math.floor(viewTop / chunkSize) * chunkSize
+    local startCX = math.floor(viewLeft / tileSize) * tileSize
+    local startCY = math.floor(viewTop / tileSize) * tileSize
 
-    for cx = startCX, viewRight, chunkSize do
-        for cy = startCY, viewBottom, chunkSize do
-            if cx >= 0 and cx < CONFIG.MapSize and cy >= 0 and cy < CONFIG.MapSize then
-                local h = hashPos(cx, cy, 55)
-                if h > 0.4 then
-                    local sx = cx + ox
-                    local sy = cy + oy
-                    local patchSize = chunkSize * (0.4 + h * 0.5)
+    -- 根据位置确定地形类型(优先使用编辑器数据)
+    local function getTerrainType(wx, wy)
+        -- 编辑器已应用地形时, 使用编辑器瓦片数据
+        if levelEditor and levelEditor:IsTerrainExported() then
+            local editorKey = levelEditor:GetTerrainImageKey(wx, wy)
+            if editorKey then return editorKey end
+        end
 
-                    -- 判断是否在毒圈外(紫黑沼泽)
-                    local dToCenter = dist(cx + chunkSize * 0.5, cy + chunkSize * 0.5, circle.cx, circle.cy)
-                    local inPoison = dToCenter > circle.radius
+        local dToCenter = dist(wx + tileSize * 0.5, wy + tileSize * 0.5, circle.cx, circle.cy)
+        local inPoison = dToCenter > circle.radius
 
-                    local pr, pg, pb, pa
-                    if inPoison then
-                        -- 毒圈外: 紫黑沼泽色(2E4A3E暗绿系)
-                        if h > 0.7 then
-                            pr, pg, pb, pa = 30, 20, 40, 80   -- 紫黑
-                        else
-                            pr, pg, pb, pa = 25, 38, 32, 70   -- 暗绿沼泽
-                        end
-                    else
-                        -- 安全区: 腐败草地暗褐
-                        if isDay then
-                            if h > 0.8 then
-                                pr, pg, pb, pa = 42, 36, 22, 55   -- 枯叶褐
-                            elseif h > 0.6 then
-                                pr, pg, pb, pa = 35, 32, 20, 45   -- 暗泥土
-                            else
-                                pr, pg, pb, pa = 30, 28, 18, 35   -- 深褐
-                            end
-                        else
-                            pr, pg, pb, pa = 10, 8, 6, 40
-                        end
-                    end
+        if inPoison then
+            -- 毒圈外: 沼泽/火山岩
+            local h = hashPos(wx, wy, 77)
+            if h > 0.6 then
+                return "volcanic"
+            else
+                return "swamp"
+            end
+        else
+            -- 安全区内: 草地/泥地/碎石/枯草/森林多种混合
+            local h = hashPos(wx, wy, 33)
+            if h > 0.82 then
+                return "rocky"
+            elseif h > 0.65 then
+                return "mud"
+            elseif h > 0.5 then
+                return "dead_grass"
+            elseif h > 0.35 then
+                return "forest"
+            else
+                return "grass"
+            end
+        end
+    end
 
+    for cx = startCX, viewRight, tileSize do
+        for cy = startCY, viewBottom, tileSize do
+            local terrainType = getTerrainType(cx, cy)
+            local img = terrainImages[terrainType]
+            if img then
+                local sx = cx + ox
+                local sy = cy + oy
+
+                -- 使用 imagePattern 铺贴图(世界坐标偏移实现无缝)
+                local paint = nvgImagePattern(ctx, sx, sy, tileSize, tileSize, 0, img, 1.0)
+                nvgBeginPath(ctx)
+                nvgRect(ctx, sx, sy, tileSize, tileSize)
+                nvgFillPaint(ctx, paint)
+                nvgFill(ctx)
+
+                -- 夜间降低亮度
+                if not isDay then
                     nvgBeginPath(ctx)
-                    nvgEllipse(ctx, sx + chunkSize * 0.5, sy + chunkSize * 0.5,
-                               patchSize * 0.5, patchSize * 0.4)
-                    nvgFillColor(ctx, nvgRGBA(pr, pg, pb, pa))
+                    nvgRect(ctx, sx, sy, tileSize, tileSize)
+                    nvgFillColor(ctx, nvgRGBA(0, 0, 0, 160))
                     nvgFill(ctx)
                 end
             end
@@ -3553,13 +3814,12 @@ function drawGroundDST(logW, logH, ox, oy)
             local bDist = circle.radius + 40 + hashPos(i, 0, 7777) * 200
             local bx = circle.cx + math.cos(angle) * bDist + ox
             local by = circle.cy + math.sin(angle) * bDist + oy
-            -- 仅绘制屏幕内的
             if bx > -20 and bx < logW + 20 and by > -20 and by < logH + 20 then
                 local bubbleR = 3 + math.sin(time * 2 + i) * 1.5
                 local bubbleA = math.floor(80 + math.sin(time * 3 + i * 1.7) * 40)
                 nvgBeginPath(ctx)
                 nvgCircle(ctx, bx, by, bubbleR)
-                nvgFillColor(ctx, nvgRGBA(46, 74, 62, bubbleA))  -- 暗绿 #2E4A3E
+                nvgFillColor(ctx, nvgRGBA(46, 74, 62, bubbleA))
                 nvgFill(ctx)
             end
         end
@@ -3892,8 +4152,8 @@ function drawGroundPotion(ctx, gp, ox, oy)
     nvgFill(ctx)
 
     -- 瓶子形状(简单的小瓶轮廓)
-    local bw = 5  -- 瓶宽
-    local bh = 10 -- 瓶高
+    local bw = 10  -- 瓶宽
+    local bh = 20 -- 瓶高
     -- 瓶身
     nvgBeginPath(ctx)
     nvgRoundedRect(ctx, sx - bw, sy - bh, bw * 2, bh, 3)
@@ -5112,73 +5372,63 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         nvgStroke(ctx)
     end
 
-    -- ===== 携带解药玩家显眼标志(蓝色药瓶图标 + 脉动光环 + 向下箭头) =====
-    if not isGhost and p.alive and p.potionState == "antidote" then
-        local time = GetTime():GetElapsedTime()
-        local pulse = 0.7 + 0.3 * math.sin(time * 5)
-        local bobY = math.sin(time * 3) * 3
-        local indicatorY = headDrawY - headR - 40 + bobY
+    -- ===== 携带药水玩家头顶图标(使用实际药水图片) =====
+    if not isGhost and p.alive and p.potionState then
+        local potionImg = potionNvgImages[p.potionState]
+        if potionImg then
+            local time = GetTime():GetElapsedTime()
+            local pulse = 0.7 + 0.3 * math.sin(time * 5)
+            local bobY = math.sin(time * 3) * 3
+            local indicatorY = headDrawY - headR - 35 + bobY
 
-        -- 外层发光圆环(蓝白色, 大范围脉动)
-        local ringR = 20 + pulse * 5
-        local ringAlpha = math.floor(120 + pulse * 80)
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx, sy, ringR)
-        nvgStrokeColor(ctx, nvgRGBA(80, 180, 255, ringAlpha))
-        nvgStrokeWidth(ctx, 2.5)
-        nvgStroke(ctx)
+            -- 根据药水类型设置光晕颜色
+            local glowR, glowG, glowB = 80, 180, 255  -- 默认蓝色(解药)
+            if p.potionState == "poison" then
+                glowR, glowG, glowB = 80, 200, 60
+            elseif p.potionState == "victory" then
+                glowR, glowG, glowB = 220, 180, 50
+            end
 
-        -- 第二层内环
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx, sy, ringR * 0.7)
-        nvgStrokeColor(ctx, nvgRGBA(150, 220, 255, math.floor(ringAlpha * 0.5)))
-        nvgStrokeWidth(ctx, 1.5)
-        nvgStroke(ctx)
-
-        -- 头顶药瓶图标(蓝色背景圆 + 白色十字)
-        local iconSize = 10
-        -- 蓝色圆形背景
-        nvgBeginPath(ctx)
-        nvgCircle(ctx, sx, indicatorY, iconSize)
-        nvgFillColor(ctx, nvgRGBA(60, 150, 255, math.floor(220 * pulse)))
-        nvgFill(ctx)
-        nvgStrokeColor(ctx, nvgRGBA(200, 240, 255, 220))
-        nvgStrokeWidth(ctx, 2)
-        nvgStroke(ctx)
-
-        -- 白色十字(解药标志)
-        nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 240))
-        nvgStrokeWidth(ctx, 2.5)
-        nvgLineCap(ctx, NVG_ROUND)
-        nvgBeginPath(ctx)
-        nvgMoveTo(ctx, sx, indicatorY - iconSize * 0.5)
-        nvgLineTo(ctx, sx, indicatorY + iconSize * 0.5)
-        nvgStroke(ctx)
-        nvgBeginPath(ctx)
-        nvgMoveTo(ctx, sx - iconSize * 0.5, indicatorY)
-        nvgLineTo(ctx, sx + iconSize * 0.5, indicatorY)
-        nvgStroke(ctx)
-
-        -- 向下小箭头(指向玩家)
-        local arrowY = indicatorY + iconSize + 4
-        nvgBeginPath(ctx)
-        nvgMoveTo(ctx, sx, arrowY + 6)
-        nvgLineTo(ctx, sx - 4, arrowY)
-        nvgLineTo(ctx, sx + 4, arrowY)
-        nvgClosePath(ctx)
-        nvgFillColor(ctx, nvgRGBA(80, 180, 255, math.floor(200 * pulse)))
-        nvgFill(ctx)
-
-        -- 光粒子环绕
-        for k = 1, 4 do
-            local angle = time * 3 + k * (math.pi / 2)
-            local particleR = ringR * 0.85
-            local px = sx + math.cos(angle) * particleR
-            local py = sy + math.sin(angle) * particleR * 0.6
+            -- 外层发光圆环
+            local ringR = 18 + pulse * 4
+            local ringAlpha = math.floor(100 + pulse * 80)
             nvgBeginPath(ctx)
-            nvgCircle(ctx, px, py, 2.5 * pulse)
-            nvgFillColor(ctx, nvgRGBA(150, 220, 255, math.floor(180 * pulse)))
+            nvgCircle(ctx, sx, indicatorY, ringR)
+            nvgStrokeColor(ctx, nvgRGBA(glowR, glowG, glowB, ringAlpha))
+            nvgStrokeWidth(ctx, 2)
+            nvgStroke(ctx)
+
+            -- 绘制药水图片
+            local iconSize = 24
+            local potionIX = sx - iconSize / 2
+            local potionIY = indicatorY - iconSize / 2
+            local imgPaint = nvgImagePattern(ctx, potionIX, potionIY, iconSize, iconSize, 0, potionImg, pulse)
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, potionIX, potionIY, iconSize, iconSize, 4)
+            nvgFillPaint(ctx, imgPaint)
             nvgFill(ctx)
+
+            -- 向下小箭头(指向玩家)
+            local arrowY = indicatorY + iconSize / 2 + 4
+            nvgBeginPath(ctx)
+            nvgMoveTo(ctx, sx, arrowY + 6)
+            nvgLineTo(ctx, sx - 4, arrowY)
+            nvgLineTo(ctx, sx + 4, arrowY)
+            nvgClosePath(ctx)
+            nvgFillColor(ctx, nvgRGBA(glowR, glowG, glowB, math.floor(200 * pulse)))
+            nvgFill(ctx)
+
+            -- 光粒子环绕
+            for k = 1, 4 do
+                local angle = time * 3 + k * (math.pi / 2)
+                local particleR = ringR * 0.85
+                local pkx = sx + math.cos(angle) * particleR
+                local pky = indicatorY + math.sin(angle) * particleR * 0.6
+                nvgBeginPath(ctx)
+                nvgCircle(ctx, pkx, pky, 2 * pulse)
+                nvgFillColor(ctx, nvgRGBA(glowR, glowG, glowB, math.floor(150 * pulse)))
+                nvgFill(ctx)
+            end
         end
     end
 
@@ -5918,38 +6168,64 @@ function drawTouchControls(logW, logH)
     nvgFillColor(ctx, nvgRGBA(255, 255, 255, 230))
     nvgText(ctx, atkCx, atkCy, "攻击")
 
-    -- 道具按钮(显示当前背包物品)
+    -- 道具按钮(药水图标, 放大两倍)
     local itemRect = rects.item
     local itemCx = itemRect.x + itemRect.w / 2
     local itemCy = itemRect.y + itemRect.h / 2
-    local itemAlpha = touchButtons.item.pressed and 200 or 120
+    local itemAlpha = touchButtons.item.pressed and 220 or 140
 
-    -- 确定按钮显示内容
-    local itemLabel = "道具"
-    local itemBgR, itemBgG, itemBgB = 80, 80, 120
+    -- 确定药水类型和对应图片
+    local potionR, potionG, potionB = 120, 120, 160  -- 默认灰色
+    local potionLabel = "道具"
+    local itemPotionImg = nil
     if p and p.alive and p.potionState then
         if p.potionState == "antidote" then
-            itemLabel = "解药"
-            itemBgR, itemBgG, itemBgB = 50, 140, 80
+            potionR, potionG, potionB = 80, 180, 255
+            potionLabel = "解药"
         elseif p.potionState == "poison" then
-            itemLabel = "毒药"
-            itemBgR, itemBgG, itemBgB = 80, 160, 50
+            potionR, potionG, potionB = 120, 200, 60
+            potionLabel = "毒药"
+        elseif p.potionState == "victory" then
+            potionR, potionG, potionB = 220, 180, 50
+            potionLabel = "胜利"
         end
+        itemPotionImg = potionNvgImages[p.potionState]
     end
 
+    -- 圆形背景
     nvgBeginPath(ctx)
-    nvgRoundedRect(ctx, itemRect.x, itemRect.y, itemRect.w, itemRect.h, 12)
-    nvgFillColor(ctx, nvgRGBA(itemBgR, itemBgG, itemBgB, itemAlpha))
+    nvgCircle(ctx, itemCx, itemCy, itemRect.w / 2)
+    nvgFillColor(ctx, nvgRGBA(20, 20, 30, itemAlpha))
     nvgFill(ctx)
-    nvgStrokeColor(ctx, nvgRGBA(itemBgR + 60, itemBgG + 60, itemBgB + 60, 180))
-    nvgStrokeWidth(ctx, 2)
+    nvgStrokeColor(ctx, nvgRGBA(potionR, potionG, potionB, 200))
+    nvgStrokeWidth(ctx, 3)
     nvgStroke(ctx)
 
+    -- 绘制药水图片或文字
+    if itemPotionImg then
+        local iconSize = math.min(itemRect.w, itemRect.h) * 0.7
+        local iconX = itemCx - iconSize / 2
+        local iconY = itemCy - iconSize / 2
+        local imgPaint = nvgImagePattern(ctx, iconX, iconY, iconSize, iconSize, 0, itemPotionImg, 1.0)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, iconX, iconY, iconSize, iconSize, 4)
+        nvgFillPaint(ctx, imgPaint)
+        nvgFill(ctx)
+    else
+        -- 无药水时显示文字
+        nvgFontFace(ctx, "sans")
+        nvgFontSize(ctx, 20)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(150, 150, 150, 180))
+        nvgText(ctx, itemCx, itemCy, potionLabel)
+    end
+
+    -- 底部文字标签
     nvgFontFace(ctx, "sans")
     nvgFontSize(ctx, 14)
-    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgFillColor(ctx, nvgRGBA(255, 255, 255, 230))
-    nvgText(ctx, itemCx, itemCy, itemLabel)
+    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
+    nvgFillColor(ctx, nvgRGBA(255, 255, 255, 200))
+    nvgText(ctx, itemCx, itemCy + itemRect.h / 2 - 18, potionLabel)
 
     -- ===== 奔跑按钮(左下, 摇杆右侧, 常驻) =====
     local sprintRect = rects.sprint
@@ -6392,6 +6668,54 @@ function drawPhaseHint(logW, logH)
 end
 
 -- ============================================================================
+-- 返回主页按钮(胜利/失败画面共用)
+-- ============================================================================
+
+
+function drawBackToMenuButton(ctx, cx, cy, color)
+    local btnW = 140
+    local btnH = 36
+    local btnX = cx - btnW / 2
+    local btnY = cy - btnH / 2
+    -- 记录按钮区域
+    backToMenuBtnRect.x = btnX
+    backToMenuBtnRect.y = btnY
+    backToMenuBtnRect.w = btnW
+    backToMenuBtnRect.h = btnH
+
+    -- 按钮背景
+    nvgBeginPath(ctx)
+    nvgRoundedRect(ctx, btnX, btnY, btnW, btnH, 18)
+    nvgFillColor(ctx, nvgRGBA(color[1], color[2], color[3], 200))
+    nvgFill(ctx)
+    -- 边框
+    nvgBeginPath(ctx)
+    nvgRoundedRect(ctx, btnX, btnY, btnW, btnH, 18)
+    nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 120))
+    nvgStrokeWidth(ctx, 2)
+    nvgStroke(ctx)
+    -- 文字
+    nvgFontFace(ctx, "sans")
+    nvgFontSize(ctx, 16)
+    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
+    nvgText(ctx, cx, cy, "返回主页", nil)
+end
+
+function backToMenu()
+    gamePhase = "menu"
+    -- 显示菜单，隐藏HUD
+    local menu = uiRoot_:FindById("menuPanel")
+    if menu then menu:SetVisible(true) end
+    local hud = uiRoot_:FindById("hudPanel")
+    if hud then hud:SetVisible(false) end
+    -- 隐藏背包
+    inventoryOpen = false
+    local invPanel = uiRoot_:FindById("inventoryPanel")
+    if invPanel then invPanel:SetVisible(false) end
+end
+
+-- ============================================================================
 -- 胜利画面
 -- ============================================================================
 function drawVictoryScreen(logW, logH)
@@ -6497,6 +6821,9 @@ function drawVictoryScreen(logW, logH)
         nvgFillColor(ctx, nvgRGBA(255, 200, 50, pAlpha))
         nvgFill(ctx)
     end
+
+    -- 返回主页按钮
+    drawBackToMenuButton(ctx, cx, logH * 0.95, {255, 215, 50})
 end
 
 -- ============================================================================
@@ -6607,4 +6934,7 @@ function drawDefeatScreen(logW, logH)
         nvgFillPaint(ctx, fogPaint)
         nvgFill(ctx)
     end
+
+    -- 返回主页按钮
+    drawBackToMenuButton(ctx, cx, logH * 0.95, {200, 80, 80})
 end

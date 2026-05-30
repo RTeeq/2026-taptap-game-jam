@@ -36,7 +36,9 @@ Shared.CONFIG = {
     -- 能量回复
     EnergyStealOnHit = 35,
     ComfortZoneRegenRate = 50,
-    ComfortZoneRadius = 150,
+    ComfortZoneWaitTime = 3,     -- 占领舒适区需站立不动等待3秒
+    ComfortZoneRadius = 75,      -- 舒适区判定半径(px)(缩小为原来的一半)
+    ComfortZoneClaimEnergy = 100, -- 每次占领获得的能量配额
     ComfortZoneMinSpawnDist = 300,
     ComfortZoneSeparation = 400,
     -- 攻击
