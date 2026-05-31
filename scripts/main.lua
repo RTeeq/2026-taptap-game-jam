@@ -39,8 +39,8 @@ local CONFIG = {
     ComfortZoneWaitTime = 3,     -- 需站立不动等待3秒才能占领成功
     ComfortZoneRadius = 75,      -- 舒适区判定半径(px) - 缩小为原来的一半
     ComfortZoneClaimEnergy = 100, -- 每次占领获得的能量配额
-    ComfortZoneMinSpawnDist = 300, -- 距任何玩家出生点最小距离
-    ComfortZoneSeparation = 400,   -- 多个舒适区之间最小距离
+    ComfortZoneMinSpawnDist = 200, -- 距任何玩家出生点最小距离
+    ComfortZoneSeparation = 250,   -- 多个舒适区之间最小距离(确保分散)
     -- 攻击(4.3)
     AttackRange = 120,       -- 像素(扇形半径)
     AttackAngle = 60,        -- 度(扇形角度)
@@ -789,9 +789,9 @@ local function enterSettleElimination()
 end
 
 -- 7.1 舒适区生成(距离约束: 300px离玩家出生点, 400px彼此分离)
-local function generateComfortZones(cx, cy, safeRadius)
+local function generateComfortZones(cx, cy, safeRadius, count)
     local zoneTypes = {"campfire", "spring", "altar"}
-    local zoneCount = math.random(1, 2)  -- 每轮1-2个
+    local zoneCount = count or 5  -- 默认5个(剩余天数=生成数量)
     local maxAttempts = 50
 
     for i = 1, zoneCount do
@@ -884,74 +884,26 @@ local function enterShrinking()
         end
     end
 
-    -- 在新安全区内补充新舒适区(反转机制: 前期少, 后期多)
-    -- 第1轮不刷新; 第2轮只刷1个; 第3轮及以后补到3个
-    local maxZonesThisRound = 3
-    if currentRound <= 1 then
-        maxZonesThisRound = 0
-    elseif currentRound == 2 then
-        maxZonesThisRound = 1
+    -- 舒适区刷新机制: 剩余天数 = 刷新数量(很分散)
+    -- 剩余5天→5个, 剩余4天→4个, 剩余3天→3个, 剩余2天→2个, 剩余1天→1个
+    local remainDays = CONFIG.TotalRounds - currentRound
+    if remainDays < 1 then remainDays = 1 end
+
+    -- 清除所有旧舒适区, 重新生成
+    comfortZones = {}
+    comfortFloats = {}
+
+    -- 重置所有玩家的舒适区占领状态
+    for i = 1, #players do
+        players[i].comfortClaims = {}
+        players[i].comfortStandTimer = 0
+        players[i].usingComfortZone = false
+        players[i].isCapturingZone = false
+        players[i].currentComfortZoneIdx = nil
     end
 
-    -- 每轮初始使用次数递增: 第1轮1次, 第2轮2次, 第3轮3次, 第4轮4次, 第5轮5次
-    local roundUses = math.min(5, currentRound)
-
-    local activeCount = 0
-    for _, zone in ipairs(comfortZones) do
-        if not zone.corrupted then activeCount = activeCount + 1 end
-    end
-    -- 补充舒适区到目标数量
-    if maxZonesThisRound > 0 and activeCount < maxZonesThisRound then
-        comfortFloats = {}
-        local needed = maxZonesThisRound - activeCount
-        for _ = 1, needed do
-            local placed = false
-            for attempt = 1, 50 do
-                local angle = math.random() * math.pi * 2
-                local r = math.random() * nextTargetRadius * 0.7
-                local zx = circle.cx + math.cos(angle) * r
-                local zy = circle.cy + math.sin(angle) * r
-                -- 距离现有舒适区足够远
-                local tooClose = false
-                for _, existing in ipairs(comfortZones) do
-                    if not existing.corrupted and dist(zx, zy, existing.x, existing.y) < CONFIG.ComfortZoneSeparation then
-                        tooClose = true
-                        break
-                    end
-                end
-                if not tooClose then
-                    local zoneTypes = {"campfire", "spring", "altar"}
-                    table.insert(comfortZones, {
-                        x = zx, y = zy,
-                        type = zoneTypes[math.random(1, 3)],
-                        playersInside = {},
-                        corrupted = false,
-                        zoneEnergy = 100,
-                        zoneCooldown = 0,
-                        zoneUsesLeft = roundUses,
-                    })
-                    placed = true
-                    break
-                end
-            end
-            if not placed then
-                -- 放宽条件
-                local angle = math.random() * math.pi * 2
-                local r = math.random() * nextTargetRadius * 0.5
-                local zoneTypes = {"campfire", "spring", "altar"}
-                table.insert(comfortZones, {
-                    x = circle.cx + math.cos(angle) * r,
-                    y = circle.cy + math.sin(angle) * r,
-                    type = zoneTypes[math.random(1, 3)],
-                    playersInside = {},
-                    corrupted = false,
-                    zoneEnergy = 100,
-                    zoneCooldown = 0,
-                    zoneUsesLeft = roundUses,
-                })
-            end
-        end
-    end
+    -- 在缩圈后的安全区内生成分散的舒适区
+    generateComfortZones(circle.cx, circle.cy, nextTargetRadius, remainDays)
 
     -- 设置缩圈目标(实际缩圈在下一轮day阶段60秒内渐进完成)
     circle.targetRadius = nextTargetRadius
@@ -2542,6 +2494,9 @@ end
 -- ============================================================================
 
 function Start()
+    -- 初始化随机种子，避免每次启动角色分配相同
+    math.randomseed(os.time())
+
     graphics.windowTitle = CONFIG.Title
     SampleStart()
 
@@ -3062,8 +3017,9 @@ function startGame()
     if hud then hud:SetVisible(true) end
 
 
-    -- 进入准备阶段(仅开局一次)
-    enterPrepare()
+    -- 直接进入第一轮白天(无准备阶段)
+    isFirstRound = false
+    enterDay()
 end
 
 function restartGame()
@@ -5761,6 +5717,47 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
         nvgFillColor(ctx, nvgRGBA(220, 210, 190, 180))
         nvgText(ctx, sx, headDrawY - 2, "P" .. tostring(p.idx), nil)
+    end
+
+    -- ===== 占领进度条(头顶, 正在占领舒适区时显示) =====
+    if p.isCapturingZone and p.comfortStandTimer and p.comfortStandTimer > 0 then
+        local barW = 40
+        local barH = 5
+        local barX = sx - barW / 2
+        local barY = headDrawY - 14  -- 在编号上方
+        local progress = math.min(p.comfortStandTimer / CONFIG.ComfortZoneWaitTime, 1.0)
+
+        -- 背景(深色半透明)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, barX - 1, barY - 1, barW + 2, barH + 2, 3)
+        nvgFillColor(ctx, nvgRGBA(0, 0, 0, 140))
+        nvgFill(ctx)
+
+        -- 进度填充(金黄色渐变)
+        if progress > 0 then
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, barX, barY, barW * progress, barH, 2.5)
+            local gR = math.floor(200 + 55 * progress)
+            local gG = math.floor(160 + 60 * progress)
+            nvgFillColor(ctx, nvgRGBA(gR, gG, 40, 230))
+            nvgFill(ctx)
+        end
+
+        -- 边框
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, barX, barY, barW, barH, 2.5)
+        nvgStrokeColor(ctx, nvgRGBA(200, 180, 80, 180))
+        nvgStrokeWidth(ctx, 0.8)
+        nvgStroke(ctx)
+
+        -- "占领中"文字
+        if fontId ~= -1 then
+            nvgFontFaceId(ctx, fontId)
+            nvgFontSize(ctx, 9)
+            nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
+            nvgFillColor(ctx, nvgRGBA(255, 220, 80, 220))
+            nvgText(ctx, sx, barY - 2, "占领中", nil)
+        end
     end
 
     -- ===== 状态特效 =====
