@@ -69,15 +69,17 @@ end
 
 function GenerateWorld()
     local T = tileMap.TERRAIN
+    -- 使用优化后的 Voronoi 大区块算法 + 方向性过渡带（LR/TB/Corner）
     tileMap:GenerateWithBiomes(os.time(), {
-        [T.GRASS] = 6, [T.MUD] = 2, [T.SWAMP] = 2,
-        [T.ROCKY] = 2, [T.DEAD_GRASS] = 2, [T.FOREST] = 2,
-    }, 4)
+        [T.GRASS] = 5, [T.MUD] = 2, [T.SWAMP] = 2,
+        [T.FOREST] = 2, [T.SAND] = 1, [T.SNOW] = 1,
+    }, {
+        regionCount = 18,       -- 18个大区块（覆盖更多地形组合）
+        transitionWidth = 2.5,  -- 过渡带宽度
+        jitter = 0.7,           -- 边缘扰动
+    })
 
-    tileMap:FillCircle(20, 15, 6, T.ROCKY)
-    tileMap:FillCircle(20, 15, 3, T.VOLCANIC)
-    tileMap:FillRect(35, 1, 40, 30, T.SAND)
-    tileMap:FillCircle(5, 5, 5, T.SNOW)
+    -- 鹅卵石路（装饰性道路）
     for x = 10, 30 do
         tileMap:SetTile(x, 10, T.COBBLESTONE)
         tileMap:SetTile(x, 11, T.COBBLESTONE)

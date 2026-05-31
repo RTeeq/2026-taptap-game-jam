@@ -192,6 +192,13 @@ end
 -- ============================================================================
 local sfxNode = nil  -- 音效播放节点(在Start中初始化)
 local sfxCache = {}  -- 缓存已加载的Sound资源
+local bgmSource = nil  -- 背景音乐播放源
+local bgmPlaylist = {   -- 背景音乐播放列表
+    "audio/游戏音乐/疯猪追月.ogg",
+    "audio/游戏音乐/倒计时乱跑.ogg",
+    "audio/游戏音乐/毒圈童话.ogg",
+}
+local bgmCurrentIdx = 0  -- 当前播放索引
 
 local function playSound(name, gain, panning)
     if not sfxNode then return end
@@ -208,6 +215,37 @@ local function playSound(name, gain, panning)
     source:SetGain(gain or 0.6)
     if panning then source:SetPanning(panning) end
     source:Play(sound)
+end
+
+-- 播放背景音乐指定曲目(最后一首循环)
+local function playBgmTrack(idx)
+    if not bgmSource then return end
+    if idx < 1 or idx > #bgmPlaylist then return end
+    bgmCurrentIdx = idx
+    local path = bgmPlaylist[idx]
+    local sound = cache:GetResource("Sound", path)
+    if sound then
+        -- 最后一首循环播放,其余播放一次
+        sound.looped = (idx == #bgmPlaylist)
+        bgmSource:Play(sound)
+        print("[BGM] 播放第" .. idx .. "首: " .. path .. (sound.looped and " (循环)" or ""))
+    else
+        print("[BGM] WARNING: 无法加载: " .. path)
+    end
+end
+
+-- 检测当前曲目播完并切换下一首
+local function updateBgm()
+    if not bgmSource then return end
+    if not bgmSource:IsPlaying() then
+        if bgmCurrentIdx == 0 then
+            -- 特殊曲目(黑夜倒计时)播完,恢复播放列表第1首
+            playBgmTrack(1)
+        elseif bgmCurrentIdx < #bgmPlaylist then
+            -- 播放列表中下一首
+            playBgmTrack(bgmCurrentIdx + 1)
+        end
+    end
 end
 
 -- 毒值警告音cooldown(避免频繁播放)
@@ -291,7 +329,113 @@ local PIG_IMAGE_PATHS = {
     "image/pig_thief.png",       -- 盗贼猪
 }
 local pigImages = {}  -- nvgCreateImage 返回的句柄数组
+
+-- 小丑猪(avatarIdx=1)走路动画帧路径(16帧循环)
+local JESTER_WALK_FRAME_PATHS = {}
+for i = 1, 16 do
+    JESTER_WALK_FRAME_PATHS[i] = string.format("image/jester_pig_anim/walk/walk_%02d.png", i)
+end
+local jesterWalkFrames = {}  -- nvgCreateImage 句柄数组(16帧)
+local JESTER_WALK_FPS = 12   -- 走路动画帧率
+
+-- 小丑猪(avatarIdx=1)待机动画帧路径(6帧循环)
+local JESTER_IDLE_FRAME_PATHS = {}
+for i = 1, 6 do
+    JESTER_IDLE_FRAME_PATHS[i] = string.format("image/jester_pig_anim/idle/idle_%02d.png", i)
+end
+local jesterIdleFrames = {}  -- nvgCreateImage 句柄数组(6帧)
+local JESTER_IDLE_FPS = 8    -- 待机动画帧率
+
+-- 小丑猪(avatarIdx=1)奔跑动画帧路径(8帧循环)
+local JESTER_RUN_FRAME_PATHS = {}
+for i = 1, 8 do
+    JESTER_RUN_FRAME_PATHS[i] = string.format("image/jester_pig_anim/run/run_%02d.png", i)
+end
+local jesterRunFrames = {}   -- nvgCreateImage 句柄数组(8帧)
+local JESTER_RUN_FPS = 14    -- 奔跑动画帧率(比走路快)
+
+-- 小丑猪(avatarIdx=1)喝药动画帧路径(16帧循环)
+local JESTER_DRINK_FRAME_PATHS = {}
+for i = 1, 16 do
+    JESTER_DRINK_FRAME_PATHS[i] = string.format("image/jester_pig_anim/drink/drink_%02d.png", i)
+end
+local jesterDrinkFrames = {} -- nvgCreateImage 句柄数组(16帧)
+local JESTER_DRINK_FPS = 10  -- 喝药动画帧率
+
+-- 小丑猪(avatarIdx=1)打击动画帧路径(8帧)
+local JESTER_ATTACK_FRAME_PATHS = {}
+for i = 1, 8 do
+    JESTER_ATTACK_FRAME_PATHS[i] = string.format("image/jester_pig_anim/attack/attack_%02d.png", i)
+end
+local jesterAttackFrames = {} -- nvgCreateImage 句柄数组(8帧)
+local JESTER_ATTACK_FPS = 16  -- 打击动画帧率(快速播放)
+
+-- 小丑猪(avatarIdx=1)受击动画帧路径(8帧)
+local JESTER_HURT_FRAME_PATHS = {}
+for i = 1, 8 do
+    JESTER_HURT_FRAME_PATHS[i] = string.format("image/jester_pig_anim/hurt/hurt_%02d.png", i)
+end
+local jesterHurtFrames = {} -- nvgCreateImage 句柄数组(8帧)
+local JESTER_HURT_FPS = 16  -- 受击动画帧率(快速播放)
+-- 战士猪(avatarIdx=2)走路动画帧路径(8帧循环)
+local WARRIOR_WALK_FRAME_PATHS = {}
+for i = 1, 8 do
+    WARRIOR_WALK_FRAME_PATHS[i] = string.format("image/warrior_pig_anim/walk/walk_%02d.png", i)
+end
+local warriorWalkFrames = {}  -- nvgCreateImage 句柄数组(8帧)
+local WARRIOR_WALK_FPS = 10   -- 走路动画帧率
+
+-- 战士猪(avatarIdx=2)待机动画帧路径(4帧循环)
+local WARRIOR_IDLE_FRAME_PATHS = {}
+for i = 1, 4 do
+    WARRIOR_IDLE_FRAME_PATHS[i] = string.format("image/warrior_pig_anim/idle/idle_%02d.png", i)
+end
+local warriorIdleFrames = {}  -- nvgCreateImage 句柄数组(4帧)
+local WARRIOR_IDLE_FPS = 6    -- 待机动画帧率(较慢，悠闲感)
+
+-- 科学家猪(avatarIdx=3)走路动画帧路径(8帧循环)
+local SCIENTIST_WALK_FRAME_PATHS = {}
+for i = 1, 8 do
+    SCIENTIST_WALK_FRAME_PATHS[i] = string.format("image/scientist_pig_anim/walk/walk_%02d.png", i)
+end
+local scientistWalkFrames = {}  -- nvgCreateImage 句柄数组(8帧)
+local SCIENTIST_WALK_FPS = 10   -- 走路动画帧率
+
+-- 矿工猪(avatarIdx=4)走路动画帧路径(16帧循环)
+local MINER_WALK_FRAME_PATHS = {}
+for i = 1, 16 do
+    MINER_WALK_FRAME_PATHS[i] = string.format("image/miner_pig_anim/walk/walk_%02d.png", i)
+end
+local minerWalkFrames = {}   -- nvgCreateImage 句柄数组(16帧)
+local MINER_WALK_FPS = 12    -- 走路动画帧率
+
+-- 矿工猪(avatarIdx=4)打击动画帧路径(8帧)
+local MINER_ATTACK_FRAME_PATHS = {}
+for i = 1, 8 do
+    MINER_ATTACK_FRAME_PATHS[i] = string.format("image/miner_pig_anim/attack/attack_%02d.png", i)
+end
+local minerAttackFrames = {} -- nvgCreateImage 句柄数组(8帧)
+local MINER_ATTACK_FPS = 16  -- 打击动画帧率(快速播放)
+
+-- 矿工猪(avatarIdx=4)待机动画帧路径(8帧循环)
+local MINER_IDLE_FRAME_PATHS = {}
+for i = 1, 8 do
+    MINER_IDLE_FRAME_PATHS[i] = string.format("image/miner_pig_anim/idle/idle_%02d.png", i)
+end
+local minerIdleFrames = {}   -- nvgCreateImage 句柄数组(8帧)
+local MINER_IDLE_FPS = 8     -- 待机动画帧率(较慢,呼吸感)
+
+-- 盗贼猪(avatarIdx=5)走路动画帧路径(8帧循环)
+local THIEF_WALK_FRAME_PATHS = {}
+for i = 1, 8 do
+    THIEF_WALK_FRAME_PATHS[i] = string.format("image/thief_pig_anim/walk/walk_%02d.png", i)
+end
+local thiefWalkFrames = {}   -- nvgCreateImage 句柄数组(8帧)
+local THIEF_WALK_FPS = 10    -- 走路动画帧率
+
 local GHOST_IMAGE_PATH = "image/Image 17.png"
+local CURSOR_IMAGE_PATH = "image/ui/鼠标.png"
+local cursorImage = nil  -- 自定义鼠标光标NVG句柄
 local ghostImage = nil  -- 鬼魂图片句柄
 local potionNvgImages = {}  -- {victory=handle, antidote=handle, poison=handle}
 local POTION_IMAGE_PATHS = {
@@ -299,6 +443,34 @@ local POTION_IMAGE_PATHS = {
     antidote = "image/游戏道具/解药.png",
     poison = "image/游戏道具/毒药.png",
 }
+
+-- 环境装饰素材图片(饥荒风手绘)
+local DECO_TREE_PATHS = {
+    "image/资产绿植/xs1.png",  -- 猪头树
+    "image/资产绿植/xs2.png",  -- 枯树红花
+}
+local DECO_ROCK_PATHS = {
+    "image/资产绿植/s2.png",   -- 散落碎石
+    "image/资产绿植/s3.png",   -- 大圆石
+    "image/资产绿植/s4.png",   -- 高角岩
+    "image/资产绿植/s5.png",   -- 扁平石板
+    "image/资产绿植/s6.png",   -- 棱角碎石
+}
+local DECO_FLOWER_PATHS = {
+    "image/资产绿植/h1.png",   -- 玫瑰
+    "image/资产绿植/h2.png",   -- 郁金香
+    "image/资产绿植/h3.png",   -- 蓟花
+    "image/资产绿植/h4.png",   -- 向日葵
+}
+local DECO_PLANT_PATHS = {
+    "image/资产绿植/1.png",    -- 高草
+    "image/资产绿植/2.png",    -- 浆果藤蔓
+    "image/资产绿植/3.png",    -- 枯灌木
+}
+local decoTreeImages = {}    -- nvgCreateImage 句柄数组
+local decoRockImages = {}
+local decoFlowerImages = {}
+local decoPlantImages = {}
 
 -- 关卡编辑器
 local LevelEditor = require("TileMap.LevelEditor")
@@ -542,6 +714,17 @@ local function enterSettle()
 
     playSound("sfx_night_transition", 0.9)  -- 画面切换音效
     playSound("sfx_nightfall", 0.8)
+
+    -- 黑夜倒计时专属音乐
+    if bgmSource then
+        local nightBgm = cache:GetResource("Sound", "audio/游戏音乐/黑夜倒计时.ogg")
+        if nightBgm then
+            nightBgm.looped = false
+            bgmSource:Play(nightBgm)
+            bgmCurrentIdx = 0  -- 标记为特殊曲目,播完后恢复播放列表
+        end
+    end
+
     print("=== 黑夜降临! " .. CONFIG.NightfallDuration .. "s 黑屏倒计时 ===")
 end
 
@@ -2385,6 +2568,149 @@ function Start()
         pigImages[i] = img
     end
 
+    -- 加载小丑猪走路动画帧(16帧)
+    for i = 1, #JESTER_WALK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, JESTER_WALK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load walk frame " .. i .. ": " .. JESTER_WALK_FRAME_PATHS[i])
+        else
+            print("Loaded jester walk frame " .. i)
+        end
+        jesterWalkFrames[i] = img
+    end
+
+    -- 加载小丑猪待机动画帧(8帧)
+    for i = 1, #JESTER_IDLE_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, JESTER_IDLE_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load idle frame " .. i .. ": " .. JESTER_IDLE_FRAME_PATHS[i])
+        else
+            print("Loaded jester idle frame " .. i)
+        end
+        jesterIdleFrames[i] = img
+    end
+
+    -- 加载小丑猪奔跑动画帧(8帧)
+    for i = 1, #JESTER_RUN_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, JESTER_RUN_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load run frame " .. i .. ": " .. JESTER_RUN_FRAME_PATHS[i])
+        else
+            print("Loaded jester run frame " .. i)
+        end
+        jesterRunFrames[i] = img
+    end
+
+    -- 加载小丑猪喝药动画帧(16帧)
+    for i = 1, #JESTER_DRINK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, JESTER_DRINK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load drink frame " .. i .. ": " .. JESTER_DRINK_FRAME_PATHS[i])
+        else
+            print("Loaded jester drink frame " .. i)
+        end
+        jesterDrinkFrames[i] = img
+    end
+
+    -- 加载小丑猪打击动画帧(8帧)
+    for i = 1, #JESTER_ATTACK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, JESTER_ATTACK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load attack frame " .. i .. ": " .. JESTER_ATTACK_FRAME_PATHS[i])
+        else
+            print("Loaded jester attack frame " .. i)
+        end
+        jesterAttackFrames[i] = img
+    end
+
+    -- 加载小丑猪受击动画帧(8帧)
+    for i = 1, #JESTER_HURT_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, JESTER_HURT_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load hurt frame " .. i .. ": " .. JESTER_HURT_FRAME_PATHS[i])
+        else
+            print("Loaded jester hurt frame " .. i)
+        end
+        jesterHurtFrames[i] = img
+    end
+
+    -- 加载战士猪走路动画帧(8帧)
+    for i = 1, #WARRIOR_WALK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, WARRIOR_WALK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load warrior walk frame " .. i .. ": " .. WARRIOR_WALK_FRAME_PATHS[i])
+        else
+            print("Loaded warrior walk frame " .. i)
+        end
+        warriorWalkFrames[i] = img
+    end
+
+    -- 加载战士猪待机动画帧(4帧)
+    for i = 1, #WARRIOR_IDLE_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, WARRIOR_IDLE_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load warrior idle frame " .. i .. ": " .. WARRIOR_IDLE_FRAME_PATHS[i])
+        else
+            print("Loaded warrior idle frame " .. i)
+        end
+        warriorIdleFrames[i] = img
+    end
+
+    -- 加载科学家猪走路动画帧(8帧)
+    for i = 1, #SCIENTIST_WALK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, SCIENTIST_WALK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load scientist walk frame " .. i .. ": " .. SCIENTIST_WALK_FRAME_PATHS[i])
+        else
+            print("Loaded scientist walk frame " .. i)
+        end
+        scientistWalkFrames[i] = img
+    end
+
+    -- 加载矿工猪走路动画帧(16帧)
+    for i = 1, #MINER_WALK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, MINER_WALK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load miner walk frame " .. i .. ": " .. MINER_WALK_FRAME_PATHS[i])
+        else
+            print("Loaded miner walk frame " .. i)
+        end
+        minerWalkFrames[i] = img
+    end
+
+    -- 加载矿工猪打击动画帧(8帧)
+    for i = 1, #MINER_ATTACK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, MINER_ATTACK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load miner attack frame " .. i .. ": " .. MINER_ATTACK_FRAME_PATHS[i])
+        else
+            print("Loaded miner attack frame " .. i)
+        end
+        minerAttackFrames[i] = img
+    end
+
+    -- 加载矿工猪待机动画帧(8帧)
+    for i = 1, #MINER_IDLE_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, MINER_IDLE_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load miner idle frame " .. i .. ": " .. MINER_IDLE_FRAME_PATHS[i])
+        else
+            print("Loaded miner idle frame " .. i)
+        end
+        minerIdleFrames[i] = img
+    end
+
+    -- 加载盗贼猪走路动画帧(8帧)
+    for i = 1, #THIEF_WALK_FRAME_PATHS do
+        local img = nvgCreateImage(nvgContext, THIEF_WALK_FRAME_PATHS[i], 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load thief walk frame " .. i .. ": " .. THIEF_WALK_FRAME_PATHS[i])
+        else
+            print("Loaded thief walk frame " .. i)
+        end
+        thiefWalkFrames[i] = img
+    end
+
     -- 加载鬼魂图片
     ghostImage = nvgCreateImage(nvgContext, GHOST_IMAGE_PATH, 0)
     if ghostImage == 0 or ghostImage == -1 then
@@ -2392,6 +2718,16 @@ function Start()
         ghostImage = nil
     else
         print("Loaded ghost image: " .. GHOST_IMAGE_PATH)
+    end
+
+    -- 加载自定义鼠标光标图片
+    cursorImage = nvgCreateImage(nvgContext, CURSOR_IMAGE_PATH, 0)
+    if cursorImage == 0 or cursorImage == -1 then
+        print("WARNING: Failed to load cursor image: " .. CURSOR_IMAGE_PATH)
+        cursorImage = nil
+    else
+        print("Loaded cursor image: " .. CURSOR_IMAGE_PATH)
+        input.mouseVisible = false  -- 隐藏系统光标
     end
 
     -- 加载药水图标图片(用于NanoVG手机端道具按钮和头顶指示器)
@@ -2418,9 +2754,48 @@ function Start()
         end
     end
 
+    -- 加载环境装饰素材图片
+    for i, path in ipairs(DECO_TREE_PATHS) do
+        local img = nvgCreateImage(nvgContext, path, 0)
+        if img and img > 0 then
+            decoTreeImages[i] = img
+            print("Loaded deco tree: " .. path)
+        else
+            print("WARNING: Failed to load deco tree: " .. path)
+        end
+    end
+    for i, path in ipairs(DECO_ROCK_PATHS) do
+        local img = nvgCreateImage(nvgContext, path, 0)
+        if img and img > 0 then
+            decoRockImages[i] = img
+            print("Loaded deco rock: " .. path)
+        else
+            print("WARNING: Failed to load deco rock: " .. path)
+        end
+    end
+    for i, path in ipairs(DECO_FLOWER_PATHS) do
+        local img = nvgCreateImage(nvgContext, path, 0)
+        if img and img > 0 then
+            decoFlowerImages[i] = img
+            print("Loaded deco flower: " .. path)
+        else
+            print("WARNING: Failed to load deco flower: " .. path)
+        end
+    end
+    for i, path in ipairs(DECO_PLANT_PATHS) do
+        local img = nvgCreateImage(nvgContext, path, 0)
+        if img and img > 0 then
+            decoPlantImages[i] = img
+            print("Loaded deco plant: " .. path)
+        else
+            print("WARNING: Failed to load deco plant: " .. path)
+        end
+    end
+
     -- 初始化关卡编辑器
     levelEditor = LevelEditor.New(nvgContext, {
-        mapPixelSize = CONFIG.MapSize,
+        mapPixelSize = math.ceil(circleInitRadius * 2),  -- 覆盖整个毒圈活动范围
+        mapCenter = { x = CONFIG.MapSize / 2, y = CONFIG.MapSize / 2 },  -- 游戏地图中心
         camera = camera,
         circle = circle,
     })
@@ -2434,6 +2809,13 @@ function Start()
     -- 10.2 初始化音效节点(纯2D游戏无scene_,手动创建)
     scene_ = Scene()
     sfxNode = scene_:CreateChild("SFX")
+
+    -- 播放背景音乐(播放列表: 第一首播完后自动播第二首,第二首循环)
+    local bgmNode = scene_:CreateChild("BGM")
+    bgmSource = bgmNode:CreateComponent("SoundSource")
+    bgmSource:SetSoundType("Music")
+    bgmSource:SetGain(0.5)
+    playBgmTrack(1)
 
     -- 订阅事件
     SubscribeToEvent(nvgContext, "NanoVGRender", "HandleRender")
@@ -2509,35 +2891,7 @@ function CreateMenuPanel()
         onClick = function(self)
             startGame()
         end,
-        children = {
-            UI.Panel {
-                marginBottom = 40,
-                padding = 16,
-                gap = 6,
-                backgroundColor = { 0, 0, 0, 160 },
-                borderRadius = 12,
-                alignItems = "center",
-                children = {
-                    UI.Label {
-                        text = "永夜森林的生存法则",
-                        fontSize = 14,
-                        fontColor = { 200, 200, 220, 230 },
-                    },
-                    UI.Label {
-                        text = "WASD移动 | 鼠标左键攻击\nTAB打开背包 | 攻击传毒求生\n手柄: 左摇杆移动 右摇杆瞄准 A攻击",
-                        fontSize = 12,
-                        fontColor = { 160, 160, 180, 200 },
-                        textAlign = "center",
-                    },
-                    UI.Label {
-                        text = "点击任意位置开始",
-                        fontSize = 12,
-                        fontColor = { 150, 150, 170, 180 },
-                        marginTop = 6,
-                    },
-                }
-            }
-        }
+        children = {}
     }
 end
 
@@ -2605,73 +2959,81 @@ function CreateInventoryPanel()
         alignItems = "center",
         backgroundColor = { 0, 0, 0, 120 },
         children = {
+            -- 背包容器(使用背包图片作为背景)
             UI.Panel {
-                width = 240,
-                padding = 20,
-                gap = 12,
-                backgroundColor = { 20, 15, 30, 240 },
-                borderRadius = 12,
-                borderWidth = 1,
-                borderColor = { 100, 60, 160, 180 },
+                width = 260, height = 300,
                 alignItems = "center",
+                justifyContent = "center",
+                backgroundImage = "image/ui/背包.png",
+                backgroundFit = "contain",
                 children = {
-                    UI.Label {
-                        text = "药剂状态",
-                        fontSize = 18,
-                        fontColor = { 220, 200, 255, 255 },
-                    },
-                    -- 药剂图标槽
+                    -- 内容区域(偏移到背包图片的"口袋"区域)
                     UI.Panel {
-                        id = "invSlot",
-                        width = 80, height = 80,
-                        justifyContent = "center",
+                        width = 160, height = 180,
+                        marginTop = 30,
+                        gap = 8,
                         alignItems = "center",
-                        backgroundColor = { 40, 30, 60, 200 },
-                        borderRadius = 8,
-                        borderWidth = 2,
-                        borderColor = { 80, 50, 140, 200 },
+                        justifyContent = "center",
                         children = {
+                            UI.Label {
+                                text = "药剂状态",
+                                fontSize = 16,
+                                fontColor = { 220, 200, 180, 255 },
+                            },
+                            -- 药剂图标槽
                             UI.Panel {
-                                id = "invPotionIcon",
-                                width = 64, height = 64,
-                                visible = false,
-                                backgroundFit = "contain",
+                                id = "invSlot",
+                                width = 72, height = 72,
+                                justifyContent = "center",
+                                alignItems = "center",
+                                backgroundColor = { 30, 25, 20, 160 },
+                                borderRadius = 6,
+                                borderWidth = 2,
+                                borderColor = { 100, 80, 50, 180 },
+                                children = {
+                                    UI.Panel {
+                                        id = "invPotionIcon",
+                                        width = 56, height = 56,
+                                        visible = false,
+                                        backgroundFit = "contain",
+                                    },
+                                    UI.Label {
+                                        id = "invItemLabel",
+                                        text = "无药剂",
+                                        fontSize = 13,
+                                        fontColor = { 160, 140, 120, 200 },
+                                    },
+                                }
                             },
                             UI.Label {
-                                id = "invItemLabel",
-                                text = "无药剂",
-                                fontSize = 14,
-                                fontColor = { 150, 150, 150, 200 },
+                                id = "invDesc",
+                                text = "黑夜时获得药剂",
+                                fontSize = 10,
+                                fontColor = { 140, 120, 100, 180 },
+                            },
+                            UI.Button {
+                                id = "drinkAntidoteBtn",
+                                text = "喝解药",
+                                visible = false,
+                                onClick = function(self)
+                                    useItem()
+                                end,
+                            },
+                            UI.Button {
+                                id = "drinkPoisonBtn",
+                                text = "喝毒药",
+                                visible = false,
+                                onClick = function(self)
+                                    useItem()
+                                end,
+                            },
+                            UI.Label {
+                                text = "按 TAB 关闭",
+                                fontSize = 10,
+                                fontColor = { 120, 100, 80, 150 },
                             },
                         }
-                    },
-                    UI.Label {
-                        id = "invDesc",
-                        text = "黑夜时获得药剂",
-                        fontSize = 11,
-                        fontColor = { 120, 120, 140, 180 },
-                    },
-                    UI.Button {
-                        id = "drinkAntidoteBtn",
-                        text = "喝解药",
-                        visible = false,
-                        onClick = function(self)
-                            useItem()  -- 自动使用当前持有的药水类型
-                        end,
-                    },
-                    UI.Button {
-                        id = "drinkPoisonBtn",
-                        text = "喝毒药",
-                        visible = false,
-                        onClick = function(self)
-                            useItem()  -- 自动使用当前持有的药水类型
-                        end,
-                    },
-                    UI.Label {
-                        text = "按 TAB 关闭",
-                        fontSize = 11,
-                        fontColor = { 100, 100, 120, 150 },
-                    },
+                    }
                 }
             }
         }
@@ -2859,6 +3221,9 @@ end
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
+
+    -- 背景音乐切歌检测
+    updateBgm()
 
     -- 关卡编辑器更新(激活时拦截游戏输入)
     if levelEditor and levelEditor:IsActive() then
@@ -3563,6 +3928,48 @@ local function generateMapDecorations()
         end
     end
 
+    -- 生成花朵(较密, 小型装饰)
+    local flowerSpacing = 180
+    for gx = 60, CONFIG.MapSize - 60, flowerSpacing do
+        for gy = 60, CONFIG.MapSize - 60, flowerSpacing do
+            local h = hashPos(gx, gy, 2100)
+            if h > 0.45 then
+                local fx = gx + (hashPos(gx, gy, 2200) - 0.5) * flowerSpacing * 0.7
+                local fy = gy + (hashPos(gx, gy, 2300) - 0.5) * flowerSpacing * 0.7
+                local variant = 1 + math.floor(hashPos(gx, gy, 2400) * #DECO_FLOWER_PATHS)
+                variant = math.min(variant, #DECO_FLOWER_PATHS)
+                table.insert(mapDecorations, {
+                    type = "flower",
+                    x = fx, y = fy,
+                    variant = variant,
+                    size = 24 + hashPos(gx, gy, 2500) * 16,
+                    seed = gx * 100 + gy,
+                })
+            end
+        end
+    end
+
+    -- 生成草丛/植物(中等密度)
+    local plantSpacing = 150
+    for gx = 40, CONFIG.MapSize - 40, plantSpacing do
+        for gy = 40, CONFIG.MapSize - 40, plantSpacing do
+            local h = hashPos(gx, gy, 2600)
+            if h > 0.5 then
+                local px = gx + (hashPos(gx, gy, 2700) - 0.5) * plantSpacing * 0.6
+                local py = gy + (hashPos(gx, gy, 2800) - 0.5) * plantSpacing * 0.6
+                local variant = 1 + math.floor(hashPos(gx, gy, 2900) * #DECO_PLANT_PATHS)
+                variant = math.min(variant, #DECO_PLANT_PATHS)
+                table.insert(mapDecorations, {
+                    type = "plant",
+                    x = px, y = py,
+                    variant = variant,
+                    size = 30 + hashPos(gx, gy, 3000) * 20,
+                    seed = gx * 100 + gy,
+                })
+            end
+        end
+    end
+
     -- 7.1 生成初始舒适区(在初始安全区内, 满足距离约束)
     comfortZones = {}
     comfortFloats = {}
@@ -3710,6 +4117,22 @@ function HandleRender(eventType, eventData)
         end
     end
 
+    -- 自定义鼠标光标(最顶层绘制)
+    if cursorImage and not isTouchDevice then
+        local mousePos = input:GetMousePosition()
+        local mx = mousePos.x / dpr
+        local my = mousePos.y / dpr
+        local cursorSize = 32
+        nvgSave(nvgContext)
+        nvgResetTransform(nvgContext)
+        local imgPaint = nvgImagePattern(nvgContext, mx - 2, my - 2, cursorSize, cursorSize, 0, cursorImage, 1.0)
+        nvgBeginPath(nvgContext)
+        nvgRect(nvgContext, mx - 2, my - 2, cursorSize, cursorSize)
+        nvgFillPaint(nvgContext, imgPaint)
+        nvgFill(nvgContext)
+        nvgRestore(nvgContext)
+    end
+
     nvgEndFrame(nvgContext)
 end
 
@@ -3733,15 +4156,17 @@ function drawGroundDST(logW, logH, ox, oy)
     nvgFillColor(ctx, nvgRGBA(bgR, bgG, bgB, 255))
     nvgFill(ctx)
 
-    -- 地形贴图铺地(32px chunk, 与世界坐标对齐, 32×32网格)
+    -- 地形贴图铺地(64px chunk, 与编辑器网格对齐)
     local tileSize = 64
+    local terrainOX = levelEditor and levelEditor.mapOriginX or 0
+    local terrainOY = levelEditor and levelEditor.mapOriginY or 0
     local viewLeft = camera.x - logW / 2 - tileSize
     local viewRight = camera.x + logW / 2 + tileSize
     local viewTop = camera.y - logH / 2 - tileSize
     local viewBottom = camera.y + logH / 2 + tileSize
 
-    local startCX = math.floor(viewLeft / tileSize) * tileSize
-    local startCY = math.floor(viewTop / tileSize) * tileSize
+    local startCX = math.floor((viewLeft - terrainOX) / tileSize) * tileSize + terrainOX
+    local startCY = math.floor((viewTop - terrainOY) / tileSize) * tileSize + terrainOY
 
     -- 根据位置确定地形类型(优先使用编辑器数据)
     local function getTerrainType(wx, wy)
@@ -4115,6 +4540,10 @@ function drawEnvironmentAndPlayers(logW, logH, ox, oy)
                 drawTreeDST(ctx, item.data, ox, oy, isDay)
             elseif item.data.type == "rock" then
                 drawRockDST(ctx, item.data, ox, oy, isDay)
+            elseif item.data.type == "flower" then
+                drawFlowerDST(ctx, item.data, ox, oy, isDay)
+            elseif item.data.type == "plant" then
+                drawPlantDST(ctx, item.data, ox, oy, isDay)
             elseif item.data.type == "deadtree" then
                 drawDeadTreeDST(ctx, item.data, ox, oy)
             end
@@ -4172,91 +4601,46 @@ function drawGroundPotion(ctx, gp, ox, oy)
 end
 
 -- ============================================================================
--- 绘制树木(饥荒风 - 扭曲黑色树干+稀疏树冠)
+-- 绘制树木(使用饥荒风手绘素材图片)
 -- ============================================================================
 
 function drawTreeDST(ctx, tree, ox, oy, isDay)
     local sx = tree.x + ox
     local sy = tree.y + oy
     local h = tree.height
-    local twist = tree.twist
 
-    -- 树干颜色(黑褐色)
-    local trunkR, trunkG, trunkB
-    if isDay then
-        trunkR, trunkG, trunkB = 25, 18, 12
-    else
-        trunkR, trunkG, trunkB = 10, 6, 8
-    end
+    -- 根据seed选择树木图片变体(2种)
+    local variant = 1 + (tree.seed % #DECO_TREE_PATHS)
+    local img = decoTreeImages[variant]
+    if not img then return end
 
-    -- 绘制阴影(地面)
+    -- 树木绘制尺寸(宽高比约1:1.2, 根据height缩放)
+    local drawH = h * 1.2
+    local drawW = drawH * 0.85
+
+    -- 绘制阴影(地面椭圆)
     nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx + 5, sy + 2, h * 0.25, h * 0.08)
-    nvgFillColor(ctx, nvgRGBA(0, 0, 0, isDay and 50 or 30))
+    nvgEllipse(ctx, sx + 3, sy + 2, drawW * 0.3, drawH * 0.06)
+    nvgFillColor(ctx, nvgRGBA(0, 0, 0, isDay and 45 or 25))
     nvgFill(ctx)
 
-    -- 树干(粗描边曲线 - 模拟饥荒的扭曲树干)
-    nvgStrokeColor(ctx, nvgRGBA(trunkR, trunkG, trunkB, 240))
-    nvgStrokeWidth(ctx, 4)
-    nvgLineCap(ctx, NVG_ROUND)
+    -- 图片绘制(锚点在底部中心)
+    local imgX = sx - drawW / 2
+    local imgY = sy - drawH
+    local alpha = isDay and 255 or 180
+
+    nvgSave(ctx)
+    nvgGlobalAlpha(ctx, alpha / 255.0)
+    local paint = nvgImagePattern(ctx, imgX, imgY, drawW, drawH, 0, img, 1.0)
     nvgBeginPath(ctx)
-    nvgMoveTo(ctx, sx, sy)
-    -- 扭曲的主干
-    local midX = sx + twist * h * 0.3
-    local midY = sy - h * 0.5
-    local topX = sx + twist * h * 0.2
-    local topY = sy - h
-    nvgQuadTo(ctx, midX, midY, topX, topY)
-    nvgStroke(ctx)
-
-    -- 分支(2-4根)
-    nvgStrokeWidth(ctx, 2.5)
-    for b = 1, tree.branches do
-        local bh = 0.3 + (b / tree.branches) * 0.5
-        local startX = sx + twist * h * 0.3 * bh
-        local startY = sy - h * bh
-        local dir = (hashPos(math.floor(tree.x), math.floor(tree.y), 2000 + b) - 0.5) * 2
-        local branchLen = h * 0.25 + hashPos(math.floor(tree.x), math.floor(tree.y), 3000 + b) * h * 0.2
-
-        nvgBeginPath(ctx)
-        nvgMoveTo(ctx, startX, startY)
-        nvgQuadTo(ctx, startX + dir * branchLen * 0.6, startY - branchLen * 0.3,
-                  startX + dir * branchLen, startY - branchLen * 0.5)
-        nvgStroke(ctx)
-    end
-
-    -- 树冠(饥荒风 - 暗色不规则团块)
-    local crownY = sy - h * 0.7
-    local crownR = h * 0.3
-    local leafR, leafG, leafB, leafA
-    if isDay then
-        leafR, leafG, leafB, leafA = 30, 45, 20, 180
-    else
-        leafR, leafG, leafB, leafA = 10, 15, 8, 200
-    end
-
-    -- 多个重叠圆形组成不规则树冠
-    for c = 1, 3 do
-        local cxOff = (hashPos(math.floor(tree.x), math.floor(tree.y), 4000 + c) - 0.5) * crownR * 0.8
-        local cyOff = (hashPos(math.floor(tree.x), math.floor(tree.y), 5000 + c) - 0.5) * crownR * 0.5
-        local cSize = crownR * (0.6 + hashPos(math.floor(tree.x), math.floor(tree.y), 6000 + c) * 0.5)
-
-        nvgBeginPath(ctx)
-        nvgEllipse(ctx, topX + cxOff, crownY + cyOff, cSize, cSize * 0.8)
-        nvgFillColor(ctx, nvgRGBA(leafR, leafG, leafB, leafA))
-        nvgFill(ctx)
-    end
-
-    -- 树冠描边(手绘感)
-    nvgBeginPath(ctx)
-    nvgEllipse(ctx, topX, crownY, crownR * 0.9, crownR * 0.7)
-    nvgStrokeColor(ctx, nvgRGBA(trunkR, trunkG, trunkB, 120))
-    nvgStrokeWidth(ctx, 1.5)
-    nvgStroke(ctx)
+    nvgRect(ctx, imgX, imgY, drawW, drawH)
+    nvgFillPaint(ctx, paint)
+    nvgFill(ctx)
+    nvgRestore(ctx)
 end
 
 -- ============================================================================
--- 绘制岩石(饥荒风 - 灰褐色圆润石头)
+-- 绘制岩石(饥荒风 - 图片素材)
 -- ============================================================================
 
 function drawRockDST(ctx, rock, ox, oy, isDay)
@@ -4264,37 +4648,102 @@ function drawRockDST(ctx, rock, ox, oy, isDay)
     local sy = rock.y + oy
     local size = rock.size
 
-    -- 阴影
+    -- 根据seed选择岩石图片变体(5种)
+    local variant = 1 + (rock.seed % #DECO_ROCK_PATHS)
+    local img = decoRockImages[variant]
+    if not img then return end
+
+    -- 岩石绘制尺寸(基于size缩放)
+    local drawW = size * 1.2
+    local drawH = size * 1.0
+
+    -- 绘制阴影
     nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx + 2, sy + size * 0.15, size * 0.6, size * 0.2)
+    nvgEllipse(ctx, sx + 2, sy + 2, drawW * 0.35, drawH * 0.1)
     nvgFillColor(ctx, nvgRGBA(0, 0, 0, isDay and 40 or 25))
     nvgFill(ctx)
 
-    -- 石头本体(深灰偏棕)
-    local stoneR, stoneG, stoneB
-    if isDay then
-        stoneR, stoneG, stoneB = 70, 65, 55
-    else
-        stoneR, stoneG, stoneB = 30, 28, 25
-    end
+    -- 图片绘制(锚点在底部中心)
+    local imgX = sx - drawW / 2
+    local imgY = sy - drawH * 0.8
+    local alpha = isDay and 255 or 180
 
+    nvgSave(ctx)
+    nvgGlobalAlpha(ctx, alpha / 255.0)
+    local paint = nvgImagePattern(ctx, imgX, imgY, drawW, drawH, 0, img, 1.0)
     nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx, sy - size * 0.2, size * 0.5, size * 0.4)
-    nvgFillColor(ctx, nvgRGBA(stoneR, stoneG, stoneB, 220))
+    nvgRect(ctx, imgX, imgY, drawW, drawH)
+    nvgFillPaint(ctx, paint)
+    nvgFill(ctx)
+    nvgRestore(ctx)
+end
+
+-- ============================================================================
+-- 绘制花朵(饥荒风 - 图片素材)
+-- ============================================================================
+
+function drawFlowerDST(ctx, flower, ox, oy, isDay)
+    local sx = flower.x + ox
+    local sy = flower.y + oy
+    local size = flower.size or 30
+
+    local variant = flower.variant or 1
+    local img = decoFlowerImages[variant]
+    if not img then return end
+
+    local drawW = size
+    local drawH = size * 1.1
+
+    -- 图片绘制(锚点在底部中心)
+    local imgX = sx - drawW / 2
+    local imgY = sy - drawH * 0.85
+    local alpha = isDay and 255 or 160
+
+    nvgSave(ctx)
+    nvgGlobalAlpha(ctx, alpha / 255.0)
+    local paint = nvgImagePattern(ctx, imgX, imgY, drawW, drawH, 0, img, 1.0)
+    nvgBeginPath(ctx)
+    nvgRect(ctx, imgX, imgY, drawW, drawH)
+    nvgFillPaint(ctx, paint)
+    nvgFill(ctx)
+    nvgRestore(ctx)
+end
+
+-- ============================================================================
+-- 绘制草丛/植物(饥荒风 - 图片素材)
+-- ============================================================================
+
+function drawPlantDST(ctx, plant, ox, oy, isDay)
+    local sx = plant.x + ox
+    local sy = plant.y + oy
+    local size = plant.size or 36
+
+    local variant = plant.variant or 1
+    local img = decoPlantImages[variant]
+    if not img then return end
+
+    local drawW = size * 0.9
+    local drawH = size * 1.3
+
+    -- 轻微阴影
+    nvgBeginPath(ctx)
+    nvgEllipse(ctx, sx + 1, sy + 1, drawW * 0.25, drawH * 0.05)
+    nvgFillColor(ctx, nvgRGBA(0, 0, 0, isDay and 30 or 15))
     nvgFill(ctx)
 
-    -- 高光
-    nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx - size * 0.1, sy - size * 0.35, size * 0.2, size * 0.15)
-    nvgFillColor(ctx, nvgRGBA(stoneR + 25, stoneG + 25, stoneB + 20, 80))
-    nvgFill(ctx)
+    -- 图片绘制(锚点在底部中心)
+    local imgX = sx - drawW / 2
+    local imgY = sy - drawH * 0.9
+    local alpha = isDay and 255 or 165
 
-    -- 描边(手绘感)
+    nvgSave(ctx)
+    nvgGlobalAlpha(ctx, alpha / 255.0)
+    local paint = nvgImagePattern(ctx, imgX, imgY, drawW, drawH, 0, img, 1.0)
     nvgBeginPath(ctx)
-    nvgEllipse(ctx, sx, sy - size * 0.2, size * 0.5, size * 0.4)
-    nvgStrokeColor(ctx, nvgRGBA(stoneR - 30, stoneG - 30, stoneB - 25, 150))
-    nvgStrokeWidth(ctx, 1.5)
-    nvgStroke(ctx)
+    nvgRect(ctx, imgX, imgY, drawW, drawH)
+    nvgFillPaint(ctx, paint)
+    nvgFill(ctx)
+    nvgRestore(ctx)
 end
 
 -- ============================================================================
@@ -4814,9 +5263,7 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         cb = 80
     end
 
-    if p.hitFlash > 0 then
-        cr, cg, cb = 240, 230, 220
-    end
+    -- hitFlash 不再改变基础颜色,白闪通过叠加层实现(见下方)
 
     -- 描边颜色(3-5px粗黑描边 - 核心视觉特征)
     local outR, outG, outB = 10, 8, 6
@@ -4870,15 +5317,154 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
     end
 
     -- ===== 猪角色图片渲染(替代原始纸片人) =====
+    local isMoving = (p.vx ~= 0 or p.vy ~= 0)
     local imgHandle = pigImages[p.avatarIdx]
-    local imgW = 72   -- 图片绘制宽度(像素)
-    local imgH = 72   -- 图片绘制高度(像素)
+
+    -- 小丑猪(avatarIdx=1)动画帧系统
+    local useAnimFrame = false
+    if p.avatarIdx == 1 then
+        local time = GetTime():GetElapsedTime()
+        if p.drinkingState == "drinking" and #jesterDrinkFrames > 0 then
+            -- 喝药时: 喝药动画(16帧, 最高优先级)
+            local drinkProgress = p.drinkingTimer / CONFIG.DrinkDuration  -- 0~1
+            local frameIdx = math.min(math.floor(drinkProgress * #jesterDrinkFrames) + 1, #jesterDrinkFrames)
+            local drinkHandle = jesterDrinkFrames[frameIdx]
+            if drinkHandle and drinkHandle ~= 0 and drinkHandle ~= -1 then
+                imgHandle = drinkHandle
+                useAnimFrame = true
+            end
+        elseif p.drinkingState == "stunned" and #jesterHurtFrames > 0 then
+            -- 受击/硬直时: 受击动画(8帧, 按硬直进度播放)
+            local hurtProgress = 1.0 - (p.drinkingTimer / CONFIG.DrinkStunDuration)  -- 0~1
+            hurtProgress = math.max(0, math.min(hurtProgress, 1.0))
+            local frameIdx = math.min(math.floor(hurtProgress * #jesterHurtFrames) + 1, #jesterHurtFrames)
+            local hurtHandle = jesterHurtFrames[frameIdx]
+            if hurtHandle and hurtHandle ~= 0 and hurtHandle ~= -1 then
+                imgHandle = hurtHandle
+                useAnimFrame = true
+            end
+        elseif p.attacking and #jesterAttackFrames > 0 then
+            -- 攻击时: 打击动画(8帧, 按攻击进度播放)
+            local totalDur = CONFIG.AttackWindup + CONFIG.AttackRecovery
+            local elapsed = totalDur - p.attackTimer
+            local progress = math.min(elapsed / totalDur, 1.0)
+            local frameIdx = math.min(math.floor(progress * #jesterAttackFrames) + 1, #jesterAttackFrames)
+            local attackHandle = jesterAttackFrames[frameIdx]
+            if attackHandle and attackHandle ~= 0 and attackHandle ~= -1 then
+                imgHandle = attackHandle
+                useAnimFrame = true
+            end
+        elseif isMoving and p.sprinting and #jesterRunFrames > 0 then
+            -- 奔跑时: 奔跑动画(8帧, 更快帧率)
+            local frameIdx = math.floor(time * JESTER_RUN_FPS) % #jesterRunFrames + 1
+            local runHandle = jesterRunFrames[frameIdx]
+            if runHandle and runHandle ~= 0 and runHandle ~= -1 then
+                imgHandle = runHandle
+                useAnimFrame = true
+            end
+        elseif isMoving and #jesterWalkFrames > 0 then
+            -- 走路时: 走路动画(16帧)
+            local frameIdx = math.floor(time * JESTER_WALK_FPS) % #jesterWalkFrames + 1
+            local walkHandle = jesterWalkFrames[frameIdx]
+            if walkHandle and walkHandle ~= 0 and walkHandle ~= -1 then
+                imgHandle = walkHandle
+                useAnimFrame = true
+            end
+        elseif #jesterIdleFrames > 0 then
+            -- 静止时: 待机动画(8帧)
+            local frameIdx = math.floor(time * JESTER_IDLE_FPS) % #jesterIdleFrames + 1
+            local idleHandle = jesterIdleFrames[frameIdx]
+            if idleHandle and idleHandle ~= 0 and idleHandle ~= -1 then
+                imgHandle = idleHandle
+                useAnimFrame = true
+            end
+        end
+    elseif p.avatarIdx == 2 then
+        -- 战士猪(avatarIdx=2)动画帧系统
+        local time = GetTime():GetElapsedTime()
+        if isMoving and #warriorWalkFrames > 0 then
+            -- 走路时: 走路动画(8帧循环)
+            local frameIdx = math.floor(time * WARRIOR_WALK_FPS) % #warriorWalkFrames + 1
+            local walkHandle = warriorWalkFrames[frameIdx]
+            if walkHandle and walkHandle ~= 0 and walkHandle ~= -1 then
+                imgHandle = walkHandle
+                useAnimFrame = true
+            end
+        elseif not isMoving and #warriorIdleFrames > 0 then
+            -- 待机时: 待机动画(4帧循环)
+            local frameIdx = math.floor(time * WARRIOR_IDLE_FPS) % #warriorIdleFrames + 1
+            local idleHandle = warriorIdleFrames[frameIdx]
+            if idleHandle and idleHandle ~= 0 and idleHandle ~= -1 then
+                imgHandle = idleHandle
+                useAnimFrame = true
+            end
+        end
+    elseif p.avatarIdx == 3 then
+        -- 科学家猪(avatarIdx=3)动画帧系统
+        local time = GetTime():GetElapsedTime()
+        if isMoving and #scientistWalkFrames > 0 then
+            -- 走路时: 走路动画(8帧循环)
+            local frameIdx = math.floor(time * SCIENTIST_WALK_FPS) % #scientistWalkFrames + 1
+            local walkHandle = scientistWalkFrames[frameIdx]
+            if walkHandle and walkHandle ~= 0 and walkHandle ~= -1 then
+                imgHandle = walkHandle
+                useAnimFrame = true
+            end
+        end
+    elseif p.avatarIdx == 4 then
+        -- 矿工猪(avatarIdx=4)动画帧系统
+        local time = GetTime():GetElapsedTime()
+        if p.attacking and #minerAttackFrames > 0 then
+            -- 攻击时: 打击动画(8帧, 按攻击进度播放)
+            local totalDur = CONFIG.AttackWindup + CONFIG.AttackRecovery
+            local elapsed = totalDur - p.attackTimer
+            local progress = math.min(elapsed / totalDur, 1.0)
+            local frameIdx = math.min(math.floor(progress * #minerAttackFrames) + 1, #minerAttackFrames)
+            local attackHandle = minerAttackFrames[frameIdx]
+            if attackHandle and attackHandle ~= 0 and attackHandle ~= -1 then
+                imgHandle = attackHandle
+                useAnimFrame = true
+            end
+        elseif isMoving and #minerWalkFrames > 0 then
+            -- 走路时: 走路动画(16帧循环)
+            local frameIdx = math.floor(time * MINER_WALK_FPS) % #minerWalkFrames + 1
+            local walkHandle = minerWalkFrames[frameIdx]
+            if walkHandle and walkHandle ~= 0 and walkHandle ~= -1 then
+                imgHandle = walkHandle
+                useAnimFrame = true
+            end
+        elseif #minerIdleFrames > 0 then
+            -- 待机时: 待机动画(8帧循环,呼吸感)
+            local frameIdx = math.floor(time * MINER_IDLE_FPS) % #minerIdleFrames + 1
+            local idleHandle = minerIdleFrames[frameIdx]
+            if idleHandle and idleHandle ~= 0 and idleHandle ~= -1 then
+                imgHandle = idleHandle
+                useAnimFrame = true
+            end
+        end
+    elseif p.avatarIdx == 5 then
+        -- 盗贼猪(avatarIdx=5)动画帧系统
+        local time = GetTime():GetElapsedTime()
+        if isMoving and #thiefWalkFrames > 0 then
+            -- 走路时: 走路动画(8帧循环)
+            local frameIdx = math.floor(time * THIEF_WALK_FPS) % #thiefWalkFrames + 1
+            local walkHandle = thiefWalkFrames[frameIdx]
+            if walkHandle and walkHandle ~= 0 and walkHandle ~= -1 then
+                imgHandle = walkHandle
+                useAnimFrame = true
+            end
+        end
+    end
+
+    -- 统一所有动画帧与静态立绘使用相同渲染尺寸(保持初始帧比例一致)
+    local imgW = 72
+    local imgH = 72
     local imgX = sx - imgW / 2
     local imgY = baseY - imgH + bendOffset  -- 脚底对齐世界坐标
 
     -- 行走动画: 轻微上下弹跳
     local walkBounce = 0
-    if p.vx ~= 0 or p.vy ~= 0 then
+    if isMoving then
         local speed = (p.energy <= 0) and 5 or 8
         walkBounce = math.abs(math.sin(GetTime():GetElapsedTime() * speed + p.idx)) * 3
     end
@@ -4896,13 +5482,7 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         imgAlpha = 0.6
     end
 
-    -- hitFlash 时变白(先画白底)
-    if p.hitFlash > 0 then
-        nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, imgX + 2, imgY + 2, imgW - 4, imgH - 4, 6)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, math.floor(200 * (p.hitFlash / 0.15))))
-        nvgFill(ctx)
-    end
+    -- hitFlash 白闪: 在图片绘制后叠加(见下方)
 
     -- 绘制猪角色图片(根据移动方向左右翻转: PC用AD键, 触控/手柄用摇杆方向)
     local flipX = (p.flipDir < 0)  -- flipDir=-1时翻转(朝左)
@@ -4927,6 +5507,8 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         nvgFillColor(ctx, nvgRGBA(cr, cg, cb, 230))
         nvgFill(ctx)
     end
+
+
 
     -- 中毒时叠加绿色斑纹效果(覆盖在图片上)
     if poisonRatio > 0.2 then

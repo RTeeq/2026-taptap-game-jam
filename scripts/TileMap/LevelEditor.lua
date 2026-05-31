@@ -119,26 +119,39 @@ function LevelEditor.New(vg, config)
     self.active = false
     self.mapPixelSize = config.mapPixelSize or 1024
 
+    -- 网格原点: 以毒圈中心为网格中心
+    local centerX = (config.mapCenter and config.mapCenter.x) or self.mapPixelSize / 2
+    local centerY = (config.mapCenter and config.mapCenter.y) or self.mapPixelSize / 2
+    self.mapOriginX = centerX - self.mapPixelSize / 2
+    self.mapOriginY = centerY - self.mapPixelSize / 2
+
     -- 编辑模式
     self.mode = MODE_TERRAIN
     self.objType = OBJ_TREE
     self.zoneType = ZONE_COMFORT
     self.comfortType = 1
 
-    -- 地形瓦片(地形模式专用) — 32×32格, 每格32px, 地图1024px
-    local tilePixel = 64  -- 1024 / 64 = 16格
-    local tileCount = 16
+    -- 地形瓦片(地形模式专用) — 每格64px, 以毒圈中心为基准
+    local tilePixel = 64
+    local tileCount = math.floor(self.mapPixelSize / tilePixel)
     self.tileMap = TerrainTileMap.New(vg, {
         mapWidth = tileCount,
         mapHeight = tileCount,
         tileSize = tilePixel,
+        infinite = true,
     })
     self.tilePixel = tilePixel
     self.tileCount = tileCount
 
-    -- 编辑器相机(编辑器激活时接管游戏相机)
-    self.editorCamX = self.mapPixelSize / 2
-    self.editorCamY = self.mapPixelSize / 2
+    -- 游戏启动时使用固定种子代码生成地形
+    self.seedCode = ""
+    self.lastGenerateSeed = 0
+    self.terrainExported = false
+    self:ImportSeedCode("3645817920687")
+
+    -- 编辑器相机(编辑器激活时接管游戏相机, 定位到游戏地图中心)
+    self.editorCamX = (config.mapCenter and config.mapCenter.x) or self.mapPixelSize / 2
+    self.editorCamY = (config.mapCenter and config.mapCenter.y) or self.mapPixelSize / 2
     self.editorZoom = 1.0
     self.savedCamX = 0
     self.savedCamY = 0
@@ -178,6 +191,16 @@ function LevelEditor.New(vg, config)
     self.zoneIcons = {}      -- { campfire=handle, spring=handle, altar=handle, circle=handle, spawn=handle }
     self.imagesLoaded = false
 
+    -- 导入/导出功能状态
+    self.seedCode = ""           -- 当前种子代码(13位)
+    self.lastGenerateSeed = 0    -- 上次随机生成用的种子
+    self.showImportDialog = false -- 是否显示导入对话框
+    self.importInput = ""        -- 导入输入框内容
+    self.importCursor = 0        -- 输入光标位置
+    self.showExportDialog = false -- 是否显示导出对话框
+    self.exportMessage = ""       -- 导出提示信息
+    self.dialogTimer = 0          -- 对话框自动消失计时器
+
     return self
 end
 
@@ -185,6 +208,12 @@ end
 function LevelEditor:InitImages()
     if self.imagesLoaded then return end
     self.imagesLoaded = true
+
+    -- 生成初始种子代码
+    if self.lastGenerateSeed > 0 and self.seedCode == "" then
+        self.seedCode = self:EncodeSeed(self.lastGenerateSeed, 18, 2.5, 0.7)
+        print("[编辑器] 初始地形种子代码: " .. self.seedCode)
+    end
     local ctx = self.vg
 
     -- 地形贴图缩略图(顺序与 EDITOR_BRUSH_TO_TERRAIN 一一对应)
@@ -270,6 +299,17 @@ end
 function LevelEditor:HandleKeyDown(key)
     if not self.active then return false end
 
+    -- 导入对话框激活时，拦截所有键盘输入
+    if self.showImportDialog then
+        return self:HandleImportDialogKey(key)
+    end
+
+    -- 导出对话框激活时，任意键关闭
+    if self.showExportDialog then
+        self.showExportDialog = false
+        return true
+    end
+
     if key == KEY_F3 then
         self:Toggle()
         return true
@@ -293,13 +333,19 @@ function LevelEditor:HandleKeyDown(key)
         end
         if key == KEY_R then
             local T = self.tileMap.TERRAIN
-            self.tileMap:GenerateWithBiomes(os.time(), {
+            self.lastGenerateSeed = os.time()
+            self.tileMap:GenerateWithBiomes(self.lastGenerateSeed, {
                 [T.GRASS] = 5, [T.MUD] = 2, [T.SWAMP] = 2,
-                [T.ROCKY] = 2, [T.DEAD_GRASS] = 2, [T.FOREST] = 2,
-                [T.VOLCANIC] = 1,
-            }, 2)
+                [T.FOREST] = 2, [T.SAND] = 1, [T.SNOW] = 1,
+            }, {
+                regionCount = 18,
+                transitionWidth = 2.5,
+                jitter = 0.7,
+            })
             self.terrainExported = true
-            print("[编辑器] 随机地形已生成并应用")
+            -- 自动生成种子代码
+            self.seedCode = self:EncodeSeed(self.lastGenerateSeed, 18, 2.5, 0.7)
+            print("[编辑器] 随机地形已生成, 种子代码: " .. self.seedCode)
             return true
         end
         if key == KEY_LEFTBRACKET then
@@ -348,6 +394,22 @@ function LevelEditor:HandleMouseDown(button, mx, my)
     local localMY = my or (input.mousePosition.y / dpr)
 
     if button == MOUSEB_LEFT then
+        -- 优先处理对话框点击
+        if self.showImportDialog then
+            if self:HandleImportDialogClick(localMX, localMY) then
+                return true
+            end
+        end
+        if self.showExportDialog then
+            self.showExportDialog = false
+            return true
+        end
+
+        -- 检查右上角按钮点击
+        if self:HandleTopRightButtonClick(localMX, localMY) then
+            return true
+        end
+
         -- 底部工具栏点击（包含模式切换和贴图选择）
         if localMY >= logH - TOOLBAR_H then
             self:HandleToolbarClick(localMX, localMY, logW, logH)
@@ -383,6 +445,117 @@ function LevelEditor:HandleMouseUp(button)
         return true
     end
     return false
+end
+
+-- ============================================================================
+-- 右上角导入/导出按钮点击
+-- ============================================================================
+
+function LevelEditor:HandleTopRightButtonClick(mx, my)
+    -- 检测导出按钮
+    if self._exportBtnRect then
+        local r = self._exportBtnRect
+        if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+            self:ExportSeedCode()
+            return true
+        end
+    end
+    -- 检测导入按钮
+    if self._importBtnRect then
+        local r = self._importBtnRect
+        if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+            self.showImportDialog = true
+            self.showExportDialog = false
+            self.importInput = ""
+            return true
+        end
+    end
+    return false
+end
+
+function LevelEditor:HandleImportDialogKey(key)
+    -- ESC: 取消
+    if key == KEY_ESCAPE then
+        self.showImportDialog = false
+        self.importInput = ""
+        return true
+    end
+
+    -- 回车: 确认
+    if key == KEY_RETURN or key == KEY_KP_ENTER then
+        if #self.importInput == 13 then
+            local success = self:ImportSeedCode(self.importInput)
+            if success then
+                self.showImportDialog = false
+                self.showExportDialog = true
+                self.exportMessage = self.importInput
+                self.dialogTimer = 3.0
+            end
+        end
+        return true
+    end
+
+    -- 退格: 删除最后一个字符
+    if key == KEY_BACKSPACE then
+        if #self.importInput > 0 then
+            self.importInput = self.importInput:sub(1, -2)
+        end
+        return true
+    end
+
+    -- 数字键 0-9 (主键盘)
+    if key >= KEY_0 and key <= KEY_9 then
+        if #self.importInput < 13 then
+            local digit = key - KEY_0
+            self.importInput = self.importInput .. tostring(digit)
+        end
+        return true
+    end
+
+    -- 数字键 0-9 (小键盘)
+    if key >= KEY_KP_0 and key <= KEY_KP_9 then
+        if #self.importInput < 13 then
+            local digit = key - KEY_KP_0
+            self.importInput = self.importInput .. tostring(digit)
+        end
+        return true
+    end
+
+    -- 其他键一律吃掉不传递
+    return true
+end
+
+function LevelEditor:HandleImportDialogClick(mx, my)
+    -- 确认按钮
+    if self._importConfirmRect then
+        local r = self._importConfirmRect
+        if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+            if #self.importInput == 13 then
+                local success = self:ImportSeedCode(self.importInput)
+                if success then
+                    self.showImportDialog = false
+                    self.showExportDialog = true
+                    self.exportMessage = self.importInput
+                    self.dialogTimer = 3.0
+                else
+                    -- 闪烁红色提示(通过临时修改输入)
+                    print("[编辑器] 种子代码无效!")
+                end
+            end
+            return true
+        end
+    end
+    -- 取消按钮
+    if self._importCancelRect then
+        local r = self._importCancelRect
+        if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+            self.showImportDialog = false
+            self.importInput = ""
+            return true
+        end
+    end
+    -- 点在对话框内但不是按钮,不关闭
+    return true
 end
 
 -- ============================================================================
@@ -494,6 +667,17 @@ end
 function LevelEditor:Update(dt, inputRef, dpr)
     if not self.active then return end
 
+    -- 更新对话框计时器
+    if self.showExportDialog and self.dialogTimer > 0 then
+        self.dialogTimer = self.dialogTimer - dt
+        if self.dialogTimer <= 0 then
+            self.showExportDialog = false
+        end
+    end
+
+    -- 对话框激活时不处理编辑器输入
+    if self.showImportDialog then return end
+
     -- WASD/方向键 移动编辑器相机
     local speed = 300 * dt / self.editorZoom
     if inputRef:GetKeyDown(KEY_W) or inputRef:GetKeyDown(KEY_UP) then
@@ -519,24 +703,21 @@ function LevelEditor:Update(dt, inputRef, dpr)
     self.gameCamera.x = self.editorCamX
     self.gameCamera.y = self.editorCamY
 
-    -- 地形绘制
+    -- 地形绘制(无限模式: 任意坐标均可绘制)
     if self.mode == MODE_TERRAIN and self.isPainting then
         local mx = inputRef.mousePosition.x / dpr
         local my = inputRef.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(mx, my, dpr)
-        local tx = math.floor(wx / self.tilePixel) + 1
-        local ty = math.floor(wy / self.tilePixel) + 1
-        if tx >= 1 and tx <= self.tileCount and ty >= 1 and ty <= self.tileCount then
-            -- currentBrush (1-7) → TerrainTileMap 枚举值
-            local terrainValue = EDITOR_BRUSH_TO_TERRAIN[self.currentBrush] or 1
-            if self.brushSize <= 1 then
-                self.tileMap:SetTile(tx, ty, terrainValue)
-            else
-                self.tileMap:FillCircle(tx, ty, self.brushSize, terrainValue)
-            end
-            -- 实时生效: 绘制即应用
-            self.terrainExported = true
+        local tx = math.floor((wx - self.mapOriginX) / self.tilePixel) + 1
+        local ty = math.floor((wy - self.mapOriginY) / self.tilePixel) + 1
+        local terrainValue = EDITOR_BRUSH_TO_TERRAIN[self.currentBrush] or 1
+        if self.brushSize <= 1 then
+            self.tileMap:SetTile(tx, ty, terrainValue)
+        else
+            self.tileMap:FillCircle(tx, ty, self.brushSize, terrainValue)
         end
+        -- 实时生效: 绘制即应用
+        self.terrainExported = true
     end
 
     -- 物件/区域拖拽
@@ -939,13 +1120,15 @@ function LevelEditor:Render(logW, logH, dpr)
         local pmy = input.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(pmx, pmy, dpr)
         local ts = self.tilePixel
-        local tx = math.floor(wx / ts)
-        local ty = math.floor(wy / ts)
+        local tx = math.floor((wx - self.mapOriginX) / ts)
+        local ty = math.floor((wy - self.mapOriginY) / ts)
+        local drawX = tx * ts + self.mapOriginX
+        local drawY = ty * ts + self.mapOriginY
         nvgBeginPath(ctx)
         if self.brushSize <= 1 then
-            nvgRect(ctx, tx * ts, ty * ts, ts, ts)
+            nvgRect(ctx, drawX, drawY, ts, ts)
         else
-            nvgCircle(ctx, (tx + 0.5) * ts, (ty + 0.5) * ts, self.brushSize * ts)
+            nvgCircle(ctx, drawX + ts * 0.5, drawY + ts * 0.5, self.brushSize * ts)
         end
         nvgStrokeColor(ctx, nvgRGBA(255, 255, 0, 200))
         nvgStrokeWidth(ctx, 2.0 / totalZoom)
@@ -986,6 +1169,7 @@ function LevelEditor:Render(logW, logH, dpr)
     -- ===== 屏幕空间 HUD =====
     self:RenderInfoBar(logW, logH, dpr)
     self:RenderBottomToolbar(logW, logH, dpr)
+    self:RenderDialogs(logW, logH)
 end
 
 -- ============================================================================
@@ -1004,9 +1188,10 @@ function LevelEditor:RenderGrid(ctx, totalZoom, logW, logH)
     local viewT = self.editorCamY - halfH
     local viewB = self.editorCamY + halfH
 
-    -- 网格覆盖整个可见区域
-    local startX = math.floor(viewL / gridSize) * gridSize
-    local startY = math.floor(viewT / gridSize) * gridSize
+    -- 网格以 mapOrigin 为基准对齐
+    local ox, oy = self.mapOriginX, self.mapOriginY
+    local startX = math.floor((viewL - ox) / gridSize) * gridSize + ox
+    local startY = math.floor((viewT - oy) / gridSize) * gridSize + oy
 
     nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 40))
     nvgStrokeWidth(ctx, 1.0 / totalZoom)
@@ -1028,17 +1213,175 @@ function LevelEditor:RenderGrid(ctx, totalZoom, logW, logH)
 end
 
 -- ============================================================================
+-- 导入/导出对话框渲染
+-- ============================================================================
+
+function LevelEditor:RenderDialogs(logW, logH)
+    local ctx = self.vg
+
+    -- ===== 导出对话框 =====
+    if self.showExportDialog and self.exportMessage ~= "" then
+        local dlgW = 280
+        local dlgH = 100
+        local dlgX = (logW - dlgW) / 2
+        local dlgY = (logH - dlgH) / 2 - 40
+
+        -- 背景
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, dlgX, dlgY, dlgW, dlgH, 8)
+        nvgFillColor(ctx, nvgRGBA(20, 25, 35, 240))
+        nvgFill(ctx)
+        nvgStrokeColor(ctx, nvgRGBA(80, 220, 120, 200))
+        nvgStrokeWidth(ctx, 2)
+        nvgStroke(ctx)
+
+        -- 标题
+        nvgFontFace(ctx, "sans")
+        nvgFontSize(ctx, 13)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(80, 220, 120, 255))
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 20, "地图种子代码已生成")
+
+        -- 种子代码(大字)
+        nvgFontSize(ctx, 20)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 50, self.exportMessage)
+
+        -- 提示
+        nvgFontSize(ctx, 10)
+        nvgFillColor(ctx, nvgRGBA(170, 170, 170, 200))
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 75, "分享此代码即可还原地图 | 点击任意处关闭")
+
+        -- 倒计时条
+        if self.dialogTimer > 0 then
+            local progress = self.dialogTimer / 5.0
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, dlgX + 10, dlgY + dlgH - 8, (dlgW - 20) * progress, 3, 2)
+            nvgFillColor(ctx, nvgRGBA(80, 220, 120, 150))
+            nvgFill(ctx)
+        end
+    end
+
+    -- ===== 导入对话框 =====
+    if self.showImportDialog then
+        local dlgW = 300
+        local dlgH = 130
+        local dlgX = (logW - dlgW) / 2
+        local dlgY = (logH - dlgH) / 2 - 40
+
+        -- 背景
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, dlgX, dlgY, dlgW, dlgH, 8)
+        nvgFillColor(ctx, nvgRGBA(20, 25, 35, 245))
+        nvgFill(ctx)
+        nvgStrokeColor(ctx, nvgRGBA(80, 150, 240, 200))
+        nvgStrokeWidth(ctx, 2)
+        nvgStroke(ctx)
+
+        -- 标题
+        nvgFontFace(ctx, "sans")
+        nvgFontSize(ctx, 13)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(80, 150, 240, 255))
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 20, "导入地图种子代码")
+
+        -- 输入框背景
+        local inputX = dlgX + 20
+        local inputY = dlgY + 38
+        local inputW = dlgW - 40
+        local inputH = 30
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, inputX, inputY, inputW, inputH, 4)
+        nvgFillColor(ctx, nvgRGBA(10, 12, 20, 255))
+        nvgFill(ctx)
+        nvgStrokeColor(ctx, nvgRGBA(100, 160, 255, 180))
+        nvgStrokeWidth(ctx, 1.5)
+        nvgStroke(ctx)
+
+        -- 输入文本
+        nvgFontSize(ctx, 16)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        if #self.importInput > 0 then
+            nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
+            nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, self.importInput)
+        else
+            nvgFillColor(ctx, nvgRGBA(100, 100, 120, 150))
+            nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, "输入13位数字代码...")
+        end
+
+        -- 闪烁光标
+        local cursorBlink = math.floor(os.clock() * 2) % 2 == 0
+        if cursorBlink then
+            -- 计算文本宽度来定位光标
+            local textW = 0
+            if #self.importInput > 0 then
+                nvgFontSize(ctx, 16)
+                local bounds = {}
+                textW = nvgTextBounds(ctx, 0, 0, self.importInput, bounds)
+            end
+            local cursorX = inputX + inputW / 2 + textW / 2 + 2
+            nvgBeginPath(ctx)
+            nvgRect(ctx, cursorX, inputY + 6, 1.5, inputH - 12)
+            nvgFillColor(ctx, nvgRGBA(100, 180, 255, 200))
+            nvgFill(ctx)
+        end
+
+        -- 字符计数
+        nvgFontSize(ctx, 10)
+        nvgTextAlign(ctx, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+        local countColor = (#self.importInput == 13) and nvgRGBA(80, 220, 120, 200) or nvgRGBA(170, 170, 170, 150)
+        nvgFillColor(ctx, countColor)
+        nvgText(ctx, inputX + inputW, inputY + inputH + 12, #self.importInput .. "/13")
+
+        -- 确认按钮
+        local btnW2 = 60
+        local btnH2 = 24
+        local confirmX = dlgX + dlgW / 2 - btnW2 / 2 - 38
+        local confirmY = dlgY + dlgH - 35
+        local canConfirm = (#self.importInput == 13)
+
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, confirmX, confirmY, btnW2, btnH2, 4)
+        if canConfirm then
+            nvgFillColor(ctx, nvgRGBA(40, 160, 80, 220))
+        else
+            nvgFillColor(ctx, nvgRGBA(60, 60, 70, 150))
+        end
+        nvgFill(ctx)
+        nvgFontSize(ctx, 11)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, canConfirm and 240 or 100))
+        nvgText(ctx, confirmX + btnW2 / 2, confirmY + btnH2 / 2, "确认")
+
+        -- 取消按钮
+        local cancelX = dlgX + dlgW / 2 + btnW2 / 2 - 22
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, cancelX, confirmY, btnW2, btnH2, 4)
+        nvgFillColor(ctx, nvgRGBA(100, 40, 40, 200))
+        nvgFill(ctx)
+        nvgFontSize(ctx, 11)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 220))
+        nvgText(ctx, cancelX + btnW2 / 2, confirmY + btnH2 / 2, "取消")
+
+        -- 保存对话框内按钮坐标
+        self._importConfirmRect = { x = confirmX, y = confirmY, w = btnW2, h = btnH2 }
+        self._importCancelRect = { x = cancelX, y = confirmY, w = btnW2, h = btnH2 }
+    end
+end
+
+-- ============================================================================
 -- 顶部模式切换栏
 -- ============================================================================
 
 function LevelEditor:RenderInfoBar(logW, logH, dpr)
     local ctx = self.vg
-    local barH = 24
+    local barH = 28
 
-    -- 顶部半透明提示条（不含按钮，仅显示信息）
+    -- 顶部半透明提示条
     nvgBeginPath(ctx)
     nvgRect(ctx, 0, 0, logW, barH)
-    nvgFillColor(ctx, nvgRGBA(15, 15, 25, 180))
+    nvgFillColor(ctx, nvgRGBA(15, 15, 25, 200))
     nvgFill(ctx)
 
     nvgFontFace(ctx, "sans")
@@ -1062,6 +1405,44 @@ function LevelEditor:RenderInfoBar(logW, logH, dpr)
         hint = hint .. " | 左键放置/拖拽 右键删除"
     end
     nvgText(ctx, logW / 2, barH / 2, hint)
+
+    -- ===== 右上角: 导入/导出按钮 =====
+    local btnW = 52
+    local btnH = 20
+    local btnGap = 6
+    local btnY = (barH - btnH) / 2
+
+    -- 导出按钮
+    local exportX = logW - btnW - 8
+    nvgBeginPath(ctx)
+    nvgRoundedRect(ctx, exportX, btnY, btnW, btnH, 4)
+    nvgFillColor(ctx, nvgRGBA(40, 160, 80, 200))
+    nvgFill(ctx)
+    nvgStrokeColor(ctx, nvgRGBA(80, 220, 120, 200))
+    nvgStrokeWidth(ctx, 1)
+    nvgStroke(ctx)
+    nvgFontSize(ctx, 11)
+    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(ctx, nvgRGBA(255, 255, 255, 240))
+    nvgText(ctx, exportX + btnW / 2, btnY + btnH / 2, "导出")
+
+    -- 导入按钮
+    local importX = exportX - btnW - btnGap
+    nvgBeginPath(ctx)
+    nvgRoundedRect(ctx, importX, btnY, btnW, btnH, 4)
+    nvgFillColor(ctx, nvgRGBA(40, 100, 180, 200))
+    nvgFill(ctx)
+    nvgStrokeColor(ctx, nvgRGBA(80, 150, 240, 200))
+    nvgStrokeWidth(ctx, 1)
+    nvgStroke(ctx)
+    nvgFontSize(ctx, 11)
+    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(ctx, nvgRGBA(255, 255, 255, 240))
+    nvgText(ctx, importX + btnW / 2, btnY + btnH / 2, "导入")
+
+    -- 保存按钮坐标用于点击检测
+    self._importBtnRect = { x = importX, y = btnY, w = btnW, h = btnH }
+    self._exportBtnRect = { x = exportX, y = btnY, w = btnW, h = btnH }
 end
 
 -- ============================================================================
@@ -1368,11 +1749,9 @@ end
 
 function LevelEditor:GetTerrainImageKey(worldX, worldY)
     if not self.terrainExported then return nil end
-    -- worldX/worldY 是游戏传入的瓦片左上角坐标(0,32,64...)
-    -- 转换为 1-based 瓦片索引
-    local tx = math.floor(worldX / self.tilePixel) + 1
-    local ty = math.floor(worldY / self.tilePixel) + 1
-    if tx < 1 or tx > self.tileCount or ty < 1 or ty > self.tileCount then return nil end
+    -- 世界坐标减去原点偏移后转为瓦片索引
+    local tx = math.floor((worldX - self.mapOriginX) / self.tilePixel) + 1
+    local ty = math.floor((worldY - self.mapOriginY) / self.tilePixel) + 1
     local t = self.tileMap:GetTile(tx, ty)
     if t then
         return TERRAIN_ENUM_TO_KEY[t]
@@ -1386,10 +1765,122 @@ end
 
 function LevelEditor:GetTerrainAt(worldX, worldY)
     if not self.terrainExported then return nil end
-    local tx = math.floor(worldX / self.tilePixel) + 1
-    local ty = math.floor(worldY / self.tilePixel) + 1
-    if tx < 1 or ty < 1 then return nil end
+    local tx = math.floor((worldX - self.mapOriginX) / self.tilePixel) + 1
+    local ty = math.floor((worldY - self.mapOriginY) / self.tilePixel) + 1
     return self.tileMap:GetTile(tx, ty)
+end
+
+-- ============================================================================
+-- 种子编码/解码 (13位数字代码)
+-- 编码方案:
+--   seed(32bit时间戳) + regionCount(5bit) + transWidth(3bit) + jitter(3bit)
+--   总共 43 bits → 编码为 13 位十进制数 (10^13 = 约43.25 bits)
+-- ============================================================================
+
+--- 将地图生成参数编码为13位种子代码
+---@param seed number 随机种子(时间戳)
+---@param regionCount number 区块数量(1-31)
+---@param transWidth number 过渡带宽度(1-7, 实际值*2)
+---@param jitter number 扰动(0-7, 实际值*10)
+---@return string 13位种子代码
+function LevelEditor:EncodeSeed(seed, regionCount, transWidth, jitter)
+    -- 将参数约束到合法范围
+    seed = math.floor(seed) % (2^32)  -- 32位
+    regionCount = math.max(1, math.min(31, math.floor(regionCount)))  -- 5位 (0-31)
+    local tw = math.max(1, math.min(7, math.floor(transWidth * 2)))   -- 3位 (1-7)
+    local jt = math.max(0, math.min(7, math.floor(jitter * 10)))      -- 3位 (0-7)
+
+    -- 组合: seed(32) | regionCount(5) | tw(3) | jt(3) = 43 bits
+    -- 用大整数运算 (Lua 5.4 支持 64位整数)
+    local combined = seed * (32 * 8 * 8)  -- seed << 11
+                   + regionCount * (8 * 8) -- regionCount << 6
+                   + tw * 8                -- tw << 3
+                   + jt                    -- jt
+
+    -- 转为13位十进制字符串(不足13位前面补0)
+    local code = string.format("%013d", combined % (10^13))
+    return code
+end
+
+--- 从13位种子代码解码地图生成参数
+---@param code string 13位种子代码
+---@return number|nil seed, number regionCount, number transWidth, number jitter
+function LevelEditor:DecodeSeed(code)
+    -- 去除空格
+    code = code:gsub("%s", "")
+
+    -- 验证格式: 必须是13位数字
+    if #code ~= 13 or not code:match("^%d+$") then
+        return nil
+    end
+
+    local combined = tonumber(code)
+    if not combined then return nil end
+
+    -- 解码各字段
+    local jt = combined % 8
+    combined = math.floor(combined / 8)
+    local tw = combined % 8
+    combined = math.floor(combined / 8)
+    local regionCount = combined % 32
+    combined = math.floor(combined / 32)
+    local seed = combined
+
+    -- 还原实际参数值
+    local transWidth = tw / 2
+    local jitter = jt / 10
+
+    -- 基本校验
+    if regionCount < 1 then regionCount = 18 end
+    if transWidth < 0.5 then transWidth = 2.5 end
+    if jitter < 0.1 then jitter = 0.7 end
+
+    return seed, regionCount, transWidth, jitter
+end
+
+--- 导出当前地图为种子代码
+function LevelEditor:ExportSeedCode()
+    local seed = self.lastGenerateSeed
+    if seed == 0 then
+        seed = os.time()
+    end
+    local code = self:EncodeSeed(seed, 18, 2.5, 0.7)
+    self.seedCode = code
+    self.showExportDialog = true
+    self.exportMessage = code
+    self.dialogTimer = 5.0  -- 5秒后自动关闭
+    print("[编辑器] 导出种子代码: " .. code)
+    return code
+end
+
+--- 从种子代码导入并重新生成地图
+---@param code string 13位种子代码
+---@return boolean 是否成功
+function LevelEditor:ImportSeedCode(code)
+    local seed, regionCount, transWidth, jitter = self:DecodeSeed(code)
+    if not seed then
+        print("[编辑器] 无效种子代码: " .. tostring(code))
+        return false
+    end
+
+    -- 使用解码的参数重新生成地形
+    self.lastGenerateSeed = seed
+    local T = self.tileMap.TERRAIN
+    self.tileMap:GenerateWithBiomes(seed, {
+        [T.GRASS] = 5, [T.MUD] = 2, [T.SWAMP] = 2,
+        [T.FOREST] = 2, [T.SAND] = 1, [T.SNOW] = 1,
+    }, {
+        regionCount = regionCount,
+        transitionWidth = transWidth,
+        jitter = jitter,
+    })
+    self.terrainExported = true
+    self.seedCode = code
+
+    -- 更新导出代码以验证一致性
+    local verifyCode = self:EncodeSeed(seed, regionCount, transWidth, jitter)
+    print("[编辑器] 导入种子代码: " .. code .. " → seed=" .. seed .. " regions=" .. regionCount)
+    return true
 end
 
 -- ============================================================================
