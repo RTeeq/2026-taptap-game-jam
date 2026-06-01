@@ -21,7 +21,31 @@ local MODE_NAMES = { "地形", "物件", "区域" }
 -- 物件子类型
 local OBJ_TREE = 1
 local OBJ_ROCK = 2
-local OBJ_NAMES = { "树木", "岩石" }
+local OBJ_FLOWER = 3
+local OBJ_PLANT = 4
+
+-- 物件资产定义（名称 + 贴图路径）
+local OBJ_ASSETS = {
+    -- 树木 (2种)
+    { type = "tree", name = "猪头树", icon = "image/资产绿植/xs1.png", variant = 1 },
+    { type = "tree", name = "枯树红花", icon = "image/资产绿植/xs2.png", variant = 2 },
+    -- 岩石 (5种)
+    { type = "rock", name = "散落碎石", icon = "image/资产绿植/s2.png", variant = 1 },
+    { type = "rock", name = "大圆石", icon = "image/资产绿植/s3.png", variant = 2 },
+    { type = "rock", name = "高角岩", icon = "image/资产绿植/s4.png", variant = 3 },
+    { type = "rock", name = "扁平石板", icon = "image/资产绿植/s5.png", variant = 4 },
+    { type = "rock", name = "棱角碎石", icon = "image/资产绿植/s6.png", variant = 5 },
+    -- 花朵 (4种)
+    { type = "flower", name = "玫瑰", icon = "image/资产绿植/h1.png", variant = 1 },
+    { type = "flower", name = "郁金香", icon = "image/资产绿植/h2.png", variant = 2 },
+    { type = "flower", name = "蓟花", icon = "image/资产绿植/h3.png", variant = 3 },
+    { type = "flower", name = "向日葵", icon = "image/资产绿植/h4.png", variant = 4 },
+    -- 植物 (3种)
+    { type = "plant", name = "高草", icon = "image/资产绿植/1.png", variant = 1 },
+    { type = "plant", name = "浆果藤蔓", icon = "image/资产绿植/2.png", variant = 2 },
+    { type = "plant", name = "枯灌木", icon = "image/资产绿植/3.png", variant = 3 },
+}
+local OBJ_ASSET_COUNT = #OBJ_ASSETS
 
 -- 区域子类型
 local ZONE_COMFORT = 1
@@ -128,6 +152,7 @@ function LevelEditor.New(vg, config)
     -- 编辑模式
     self.mode = MODE_TERRAIN
     self.objType = OBJ_TREE
+    self.objAssetIdx = 1       -- 当前选中的物件资产索引(对应OBJ_ASSETS)
     self.zoneType = ZONE_COMFORT
     self.comfortType = 1
 
@@ -200,6 +225,7 @@ function LevelEditor.New(vg, config)
     self.showExportDialog = false -- 是否显示导出对话框
     self.exportMessage = ""       -- 导出提示信息
     self.dialogTimer = 0          -- 对话框自动消失计时器
+    self._copyFlash = 0           -- 复制按钮闪烁计时
 
     return self
 end
@@ -263,8 +289,14 @@ function LevelEditor:InitImages()
         end
     end
 
-    -- 物件不用贴图(使用绘制图标)
-    -- 区域也使用绘制图标
+    -- 物件贴图缩略图
+    self.objectIcons = {}
+    for i, asset in ipairs(OBJ_ASSETS) do
+        local img = nvgCreateImage(ctx, asset.icon, 0)
+        if img and img > 0 then
+            self.objectIcons[i] = img
+        end
+    end
 end
 
 -- ============================================================================
@@ -401,7 +433,21 @@ function LevelEditor:HandleMouseDown(button, mx, my)
             end
         end
         if self.showExportDialog then
+            -- 检查复制按钮
+            if self._exportCopyRect then
+                local r = self._exportCopyRect
+                if localMX >= r.x and localMX <= r.x + r.w and localMY >= r.y and localMY <= r.y + r.h then
+                    -- 复制到剪贴板
+                    if ui then
+                        ui:SetClipboardText(self.exportMessage)
+                    end
+                    self._copyFlash = 1.0
+                    print("[编辑器] 已复制种子代码: " .. self.exportMessage)
+                    return true
+                end
+            end
             self.showExportDialog = false
+            self._exportCopyRect = nil
             return true
         end
 
@@ -489,7 +535,7 @@ function LevelEditor:HandleImportDialogKey(key)
                 self.showImportDialog = false
                 self.showExportDialog = true
                 self.exportMessage = self.importInput
-                self.dialogTimer = 3.0
+                self.dialogTimer = 5.0
             end
         end
         return true
@@ -525,7 +571,49 @@ function LevelEditor:HandleImportDialogKey(key)
     return true
 end
 
+--- 处理文本输入事件（支持移动端虚拟键盘）
+---@param text string 输入的文本字符
+---@return boolean 是否消耗事件
+function LevelEditor:HandleTextInput(text)
+    if not self.active then return false end
+    if not self.showImportDialog then return false end
+
+    -- 只接受数字字符
+    for i = 1, #text do
+        local ch = text:sub(i, i)
+        if ch >= "0" and ch <= "9" then
+            if #self.importInput < 13 then
+                self.importInput = self.importInput .. ch
+            end
+        end
+    end
+    return true
+end
+
 function LevelEditor:HandleImportDialogClick(mx, my)
+    -- 数字键盘按钮
+    if self._numpadRects then
+        for _, r in ipairs(self._numpadRects) do
+            if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+                if #self.importInput < 13 then
+                    self.importInput = self.importInput .. r.key
+                end
+                return true
+            end
+        end
+    end
+
+    -- 删除按钮
+    if self._numpadDeleteRect then
+        local r = self._numpadDeleteRect
+        if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+            if #self.importInput > 0 then
+                self.importInput = self.importInput:sub(1, -2)
+            end
+            return true
+        end
+    end
+
     -- 确认按钮
     if self._importConfirmRect then
         local r = self._importConfirmRect
@@ -536,15 +624,15 @@ function LevelEditor:HandleImportDialogClick(mx, my)
                     self.showImportDialog = false
                     self.showExportDialog = true
                     self.exportMessage = self.importInput
-                    self.dialogTimer = 3.0
+                    self.dialogTimer = 5.0
                 else
-                    -- 闪烁红色提示(通过临时修改输入)
                     print("[编辑器] 种子代码无效!")
                 end
             end
             return true
         end
     end
+
     -- 取消按钮
     if self._importCancelRect then
         local r = self._importCancelRect
@@ -554,6 +642,7 @@ function LevelEditor:HandleImportDialogClick(mx, my)
             return true
         end
     end
+
     -- 点在对话框内但不是按钮,不关闭
     return true
 end
@@ -612,13 +701,33 @@ function LevelEditor:HandleToolbarClick(mx, my, logW, logH)
             end
         end
     elseif self.mode == MODE_OBJECT then
-        -- 2个物件按钮
-        local cellW = 64
-        local startX = (logW - cellW * 2 - 10) / 2
-        for i = 1, 2 do
-            local cx = startX + (i - 1) * (cellW + 10)
-            if mx >= cx and mx < cx + cellW then
-                self.objType = i
+        -- 物件资产网格点击（与渲染一致）
+        local cols = 7
+        local count = OBJ_ASSET_COUNT
+        local rows = math.ceil(count / cols)
+        local cellSize = 48
+        local padX = 6
+        local padY = 4
+        local labelH = 12
+        local totalW = cols * cellSize + (cols - 1) * padX
+        local totalH = rows * (cellSize + labelH) + (rows - 1) * padY
+        local startX = (logW - totalW) / 2
+        local availH = TOOLBAR_H - 36
+        local startY = barY + (availH - totalH) / 2
+
+        for i = 1, count do
+            local col = ((i - 1) % cols)
+            local row = math.floor((i - 1) / cols)
+            local cx = startX + col * (cellSize + padX)
+            local cellY = startY + row * (cellSize + labelH + padY)
+            if mx >= cx and mx < cx + cellSize and my >= cellY and my < cellY + cellSize + labelH then
+                self.objAssetIdx = i
+                local asset = OBJ_ASSETS[i]
+                if asset.type == "tree" then self.objType = OBJ_TREE
+                elseif asset.type == "rock" then self.objType = OBJ_ROCK
+                elseif asset.type == "flower" then self.objType = OBJ_FLOWER
+                elseif asset.type == "plant" then self.objType = OBJ_PLANT
+                end
                 return
             end
         end
@@ -672,7 +781,13 @@ function LevelEditor:Update(dt, inputRef, dpr)
         self.dialogTimer = self.dialogTimer - dt
         if self.dialogTimer <= 0 then
             self.showExportDialog = false
+            self._exportCopyRect = nil
         end
+    end
+
+    -- 复制按钮闪烁计时
+    if self._copyFlash and self._copyFlash > 0 then
+        self._copyFlash = self._copyFlash - dt
     end
 
     -- 对话框激活时不处理编辑器输入
@@ -784,28 +899,47 @@ function LevelEditor:HandleObjectMouseDown()
     self.selectedType = nil
     local decos2 = self:GetMapDecorations()
     if decos2 then
+        local asset = OBJ_ASSETS[self.objAssetIdx]
         local obj
-        if self.objType == OBJ_TREE then
+        if asset.type == "tree" then
             obj = {
                 type = "tree",
                 x = wx, y = wy,
                 height = 60 + math.random() * 80,
                 twist = (math.random() - 0.5) * 0.6,
                 branches = 2 + math.random(0, 3),
-                seed = math.random(1, 99999),
+                seed = (asset.variant - 1) * 50000 + math.random(1, 49999),
             }
-        else
+        elseif asset.type == "rock" then
             obj = {
                 type = "rock",
                 x = wx, y = wy,
                 size = 8 + math.random() * 18,
+                seed = (asset.variant - 1) * 50000 + math.random(1, 49999),
+            }
+        elseif asset.type == "flower" then
+            obj = {
+                type = "flower",
+                x = wx, y = wy,
+                variant = asset.variant,
+                size = 24 + math.random() * 16,
+                seed = math.random(1, 99999),
+            }
+        elseif asset.type == "plant" then
+            obj = {
+                type = "plant",
+                x = wx, y = wy,
+                variant = asset.variant,
+                size = 30 + math.random() * 20,
                 seed = math.random(1, 99999),
             }
         end
-        table.insert(decos2, obj)
-        self.selectedType = "object"
-        self.selectedIdx = #decos2
-        print("[编辑器] 放置" .. obj.type .. " (" .. math.floor(wx) .. "," .. math.floor(wy) .. ")")
+        if obj then
+            table.insert(decos2, obj)
+            self.selectedType = "object"
+            self.selectedIdx = #decos2
+            print("[编辑器] 放置" .. obj.type .. ":" .. asset.name .. " (" .. math.floor(wx) .. "," .. math.floor(wy) .. ")")
+        end
     end
 end
 
@@ -1221,8 +1355,8 @@ function LevelEditor:RenderDialogs(logW, logH)
 
     -- ===== 导出对话框 =====
     if self.showExportDialog and self.exportMessage ~= "" then
-        local dlgW = 280
-        local dlgH = 100
+        local dlgW = 300
+        local dlgH = 120
         local dlgX = (logW - dlgW) / 2
         local dlgY = (logH - dlgH) / 2 - 40
 
@@ -1245,18 +1379,44 @@ function LevelEditor:RenderDialogs(logW, logH)
         -- 种子代码(大字)
         nvgFontSize(ctx, 20)
         nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
-        nvgText(ctx, dlgX + dlgW / 2, dlgY + 50, self.exportMessage)
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 48, self.exportMessage)
 
-        -- 提示
-        nvgFontSize(ctx, 10)
-        nvgFillColor(ctx, nvgRGBA(170, 170, 170, 200))
-        nvgText(ctx, dlgX + dlgW / 2, dlgY + 75, "分享此代码即可还原地图 | 点击任意处关闭")
+        -- 复制按钮
+        local copyBtnW = 64
+        local copyBtnH = 26
+        local copyBtnX = dlgX + dlgW / 2 - copyBtnW / 2
+        local copyBtnY = dlgY + 68
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, copyBtnX, copyBtnY, copyBtnW, copyBtnH, 5)
+        if self._copyFlash and self._copyFlash > 0 then
+            nvgFillColor(ctx, nvgRGBA(40, 180, 80, 240))
+        else
+            nvgFillColor(ctx, nvgRGBA(60, 130, 220, 220))
+        end
+        nvgFill(ctx)
+        nvgFontSize(ctx, 12)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
+        if self._copyFlash and self._copyFlash > 0 then
+            nvgText(ctx, copyBtnX + copyBtnW / 2, copyBtnY + copyBtnH / 2, "已复制!")
+        else
+            nvgText(ctx, copyBtnX + copyBtnW / 2, copyBtnY + copyBtnH / 2, "复制")
+        end
+
+        -- 保存复制按钮坐标
+        self._exportCopyRect = { x = copyBtnX, y = copyBtnY, w = copyBtnW, h = copyBtnH }
+
+        -- 底部提示
+        nvgFontSize(ctx, 9)
+        nvgFillColor(ctx, nvgRGBA(140, 140, 140, 180))
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + dlgH - 12, "点击空白处关闭")
 
         -- 倒计时条
         if self.dialogTimer > 0 then
             local progress = self.dialogTimer / 5.0
             nvgBeginPath(ctx)
-            nvgRoundedRect(ctx, dlgX + 10, dlgY + dlgH - 8, (dlgW - 20) * progress, 3, 2)
+            nvgRoundedRect(ctx, dlgX + 10, dlgY + dlgH - 5, (dlgW - 20) * progress, 3, 2)
             nvgFillColor(ctx, nvgRGBA(80, 220, 120, 150))
             nvgFill(ctx)
         end
@@ -1265,9 +1425,9 @@ function LevelEditor:RenderDialogs(logW, logH)
     -- ===== 导入对话框 =====
     if self.showImportDialog then
         local dlgW = 300
-        local dlgH = 130
+        local dlgH = 240
         local dlgX = (logW - dlgW) / 2
-        local dlgY = (logH - dlgH) / 2 - 40
+        local dlgY = (logH - dlgH) / 2 - 20
 
         -- 背景
         nvgBeginPath(ctx)
@@ -1283,11 +1443,11 @@ function LevelEditor:RenderDialogs(logW, logH)
         nvgFontSize(ctx, 13)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(ctx, nvgRGBA(80, 150, 240, 255))
-        nvgText(ctx, dlgX + dlgW / 2, dlgY + 20, "导入地图种子代码")
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 18, "导入地图种子代码")
 
         -- 输入框背景
         local inputX = dlgX + 20
-        local inputY = dlgY + 38
+        local inputY = dlgY + 34
         local inputW = dlgW - 40
         local inputH = 30
         nvgBeginPath(ctx)
@@ -1311,8 +1471,7 @@ function LevelEditor:RenderDialogs(logW, logH)
 
         -- 闪烁光标
         local cursorBlink = math.floor(os.clock() * 2) % 2 == 0
-        if cursorBlink then
-            -- 计算文本宽度来定位光标
+        if cursorBlink and #self.importInput < 13 then
             local textW = 0
             if #self.importInput > 0 then
                 nvgFontSize(ctx, 16)
@@ -1331,42 +1490,97 @@ function LevelEditor:RenderDialogs(logW, logH)
         nvgTextAlign(ctx, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
         local countColor = (#self.importInput == 13) and nvgRGBA(80, 220, 120, 200) or nvgRGBA(170, 170, 170, 150)
         nvgFillColor(ctx, countColor)
-        nvgText(ctx, inputX + inputW, inputY + inputH + 12, #self.importInput .. "/13")
+        nvgText(ctx, inputX + inputW, inputY + inputH + 10, #self.importInput .. "/13")
 
-        -- 确认按钮
-        local btnW2 = 60
-        local btnH2 = 24
-        local confirmX = dlgX + dlgW / 2 - btnW2 / 2 - 38
-        local confirmY = dlgY + dlgH - 35
-        local canConfirm = (#self.importInput == 13)
+        -- ===== 数字键盘 =====
+        local numpadStartY = inputY + inputH + 20
+        local keyW = 38
+        local keyH = 28
+        local keyGapX = 6
+        local keyGapY = 5
+        local numpadW = 5 * keyW + 4 * keyGapX  -- 5列
+        local numpadX = dlgX + (dlgW - numpadW) / 2
+
+        -- 数字键盘布局: [1][2][3][4][5] / [6][7][8][9][0] / [⌫ 删除][确认]
+        local numKeys = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }
+        self._numpadRects = {}
+
+        for idx, key in ipairs(numKeys) do
+            local row = math.floor((idx - 1) / 5)
+            local col = (idx - 1) % 5
+            local kx = numpadX + col * (keyW + keyGapX)
+            local ky = numpadStartY + row * (keyH + keyGapY)
+
+            -- 按键背景
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, kx, ky, keyW, keyH, 4)
+            nvgFillColor(ctx, nvgRGBA(50, 55, 70, 220))
+            nvgFill(ctx)
+            nvgStrokeColor(ctx, nvgRGBA(100, 120, 160, 120))
+            nvgStrokeWidth(ctx, 1)
+            nvgStroke(ctx)
+
+            -- 按键文字
+            nvgFontSize(ctx, 14)
+            nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+            nvgFillColor(ctx, nvgRGBA(255, 255, 255, 230))
+            nvgText(ctx, kx + keyW / 2, ky + keyH / 2, key)
+
+            self._numpadRects[idx] = { x = kx, y = ky, w = keyW, h = keyH, key = key }
+        end
+
+        -- 第三行: [⌫ 删除] 和 [确认]
+        local row3Y = numpadStartY + 2 * (keyH + keyGapY)
+        local delBtnW = 2 * keyW + keyGapX
+        local delBtnX = numpadX
 
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, confirmX, confirmY, btnW2, btnH2, 4)
+        nvgRoundedRect(ctx, delBtnX, row3Y, delBtnW, keyH, 4)
+        nvgFillColor(ctx, nvgRGBA(120, 50, 50, 200))
+        nvgFill(ctx)
+        nvgFontSize(ctx, 12)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 230))
+        nvgText(ctx, delBtnX + delBtnW / 2, row3Y + keyH / 2, "删除")
+
+        self._numpadDeleteRect = { x = delBtnX, y = row3Y, w = delBtnW, h = keyH }
+
+        -- 确认按钮
+        local canConfirm = (#self.importInput == 13)
+        local confirmBtnW = 2 * keyW + keyGapX
+        local confirmBtnX = numpadX + 3 * (keyW + keyGapX)
+
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, confirmBtnX, row3Y, confirmBtnW, keyH, 4)
         if canConfirm then
             nvgFillColor(ctx, nvgRGBA(40, 160, 80, 220))
         else
-            nvgFillColor(ctx, nvgRGBA(60, 60, 70, 150))
+            nvgFillColor(ctx, nvgRGBA(50, 55, 65, 150))
         end
         nvgFill(ctx)
-        nvgFontSize(ctx, 11)
+        nvgFontSize(ctx, 12)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, canConfirm and 240 or 100))
-        nvgText(ctx, confirmX + btnW2 / 2, confirmY + btnH2 / 2, "确认")
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, canConfirm and 240 or 80))
+        nvgText(ctx, confirmBtnX + confirmBtnW / 2, row3Y + keyH / 2, "确认")
 
-        -- 取消按钮
-        local cancelX = dlgX + dlgW / 2 + btnW2 / 2 - 22
+        self._importConfirmRect = { x = confirmBtnX, y = row3Y, w = confirmBtnW, h = keyH }
+
+        -- 取消按钮(在标题右侧)
+        local cancelBtnW = 40
+        local cancelBtnH = 20
+        local cancelBtnX = dlgX + dlgW - cancelBtnW - 10
+        local cancelBtnY = dlgY + 8
+
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, cancelX, confirmY, btnW2, btnH2, 4)
-        nvgFillColor(ctx, nvgRGBA(100, 40, 40, 200))
+        nvgRoundedRect(ctx, cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, 4)
+        nvgFillColor(ctx, nvgRGBA(100, 40, 40, 180))
         nvgFill(ctx)
-        nvgFontSize(ctx, 11)
+        nvgFontSize(ctx, 10)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 220))
-        nvgText(ctx, cancelX + btnW2 / 2, confirmY + btnH2 / 2, "取消")
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 200))
+        nvgText(ctx, cancelBtnX + cancelBtnW / 2, cancelBtnY + cancelBtnH / 2, "取消")
 
-        -- 保存对话框内按钮坐标
-        self._importConfirmRect = { x = confirmX, y = confirmY, w = btnW2, h = btnH2 }
-        self._importCancelRect = { x = cancelX, y = confirmY, w = btnW2, h = btnH2 }
+        self._importCancelRect = { x = cancelBtnX, y = cancelBtnY, w = cancelBtnW, h = cancelBtnH }
     end
 end
 
@@ -1585,80 +1799,80 @@ function LevelEditor:RenderTerrainToolbar(ctx, logW, logH, barY)
     end
 end
 
--- 物件工具栏: 树木/岩石图标
+-- 物件工具栏: 以缩略图网格显示所有可放置资产
 function LevelEditor:RenderObjectToolbar(ctx, logW, logH, barY)
-    local cellSize = 56
-    local padding = 16
-    local availH = TOOLBAR_H - 36  -- 排除底部模式栏
-    local totalW = 2 * cellSize + padding
+    local cols = 7
+    local count = OBJ_ASSET_COUNT
+    local rows = math.ceil(count / cols)
+    local cellSize = 48
+    local padX = 6
+    local padY = 4
+    local labelH = 12
+    local totalW = cols * cellSize + (cols - 1) * padX
+    local totalH = rows * (cellSize + labelH) + (rows - 1) * padY
     local startX = (logW - totalW) / 2
-    local cellY = barY + (availH - cellSize) / 2
+    local availH = TOOLBAR_H - 36
+    local startY = barY + (availH - totalH) / 2
 
-    -- 树木
-    local cx1 = startX
-    local isTree = (self.objType == OBJ_TREE)
-    if isTree then
+    for i = 1, count do
+        local col = ((i - 1) % cols)
+        local row = math.floor((i - 1) / cols)
+        local cx = startX + col * (cellSize + padX)
+        local cellY = startY + row * (cellSize + labelH + padY)
+        local isSelected = (self.objAssetIdx == i)
+
+        -- 选中边框
+        if isSelected then
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, cx - 2, cellY - 2, cellSize + 4, cellSize + 4, 5)
+            nvgStrokeColor(ctx, nvgRGBA(60, 200, 255, 255))
+            nvgStrokeWidth(ctx, 2)
+            nvgStroke(ctx)
+        end
+
+        -- 背景
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, cx1 - 3, cellY - 3, cellSize + 6, cellSize + 6, 6)
-        nvgStrokeColor(ctx, nvgRGBA(60, 200, 255, 255))
-        nvgStrokeWidth(ctx, 2)
-        nvgStroke(ctx)
-    end
-    -- 画树图标
-    nvgBeginPath(ctx)
-    nvgRoundedRect(ctx, cx1, cellY, cellSize, cellSize, 4)
-    nvgFillColor(ctx, nvgRGBA(25, 45, 20, 220))
-    nvgFill(ctx)
-    -- 树干
-    nvgBeginPath(ctx)
-    nvgRect(ctx, cx1 + cellSize/2 - 3, cellY + cellSize * 0.55, 6, cellSize * 0.35)
-    nvgFillColor(ctx, nvgRGBA(100, 70, 40, 255))
-    nvgFill(ctx)
-    -- 树冠
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, cx1 + cellSize/2, cellY + cellSize * 0.38, cellSize * 0.28)
-    nvgFillColor(ctx, nvgRGBA(60, 140, 50, 255))
-    nvgFill(ctx)
-    nvgFontSize(ctx, 9)
-    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    nvgFillColor(ctx, nvgRGBA(255, 255, 255, isTree and 255 or 150))
-    nvgText(ctx, cx1 + cellSize / 2, cellY + cellSize + 2, "树木")
+        nvgRoundedRect(ctx, cx, cellY, cellSize, cellSize, 4)
+        nvgFillColor(ctx, nvgRGBA(30, 35, 40, 220))
+        nvgFill(ctx)
 
-    -- 岩石
-    local cx2 = startX + cellSize + padding
-    local isRock = (self.objType == OBJ_ROCK)
-    if isRock then
+        -- 贴图缩略图
+        if self.objectIcons[i] then
+            local pat = nvgImagePattern(ctx, cx + 2, cellY + 2, cellSize - 4, cellSize - 4, 0, self.objectIcons[i], isSelected and 1.0 or 0.75)
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, cx + 2, cellY + 2, cellSize - 4, cellSize - 4, 3)
+            nvgFillPaint(ctx, pat)
+            nvgFill(ctx)
+        end
+
+        -- 边框
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, cx2 - 3, cellY - 3, cellSize + 6, cellSize + 6, 6)
-        nvgStrokeColor(ctx, nvgRGBA(60, 200, 255, 255))
-        nvgStrokeWidth(ctx, 2)
+        nvgRoundedRect(ctx, cx, cellY, cellSize, cellSize, 4)
+        nvgStrokeColor(ctx, nvgRGBA(80, 80, 100, isSelected and 200 or 80))
+        nvgStrokeWidth(ctx, 1)
         nvgStroke(ctx)
-    end
-    -- 画石头图标
-    nvgBeginPath(ctx)
-    nvgRoundedRect(ctx, cx2, cellY, cellSize, cellSize, 4)
-    nvgFillColor(ctx, nvgRGBA(35, 35, 40, 220))
-    nvgFill(ctx)
-    nvgBeginPath(ctx)
-    nvgEllipse(ctx, cx2 + cellSize/2, cellY + cellSize * 0.5, cellSize * 0.3, cellSize * 0.22)
-    nvgFillColor(ctx, nvgRGBA(120, 120, 130, 255))
-    nvgFill(ctx)
-    nvgBeginPath(ctx)
-    nvgEllipse(ctx, cx2 + cellSize*0.38, cellY + cellSize * 0.6, cellSize * 0.18, cellSize * 0.14)
-    nvgFillColor(ctx, nvgRGBA(90, 90, 100, 255))
-    nvgFill(ctx)
-    nvgFontSize(ctx, 9)
-    nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    nvgFillColor(ctx, nvgRGBA(255, 255, 255, isRock and 255 or 150))
-    nvgText(ctx, cx2 + cellSize / 2, cellY + cellSize + 2, "岩石")
 
-    -- 数量提示
+        -- 名称标签
+        nvgFontSize(ctx, 8)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, isSelected and 255 or 150))
+        nvgText(ctx, cx + cellSize / 2, cellY + cellSize + 1, OBJ_ASSETS[i].name)
+    end
+
+    -- 右侧数量提示
     local decos = self:GetMapDecorations()
-    local count = decos and #decos or 0
+    local objCount = 0
+    if decos then
+        for _, d in ipairs(decos) do
+            if d.type == "tree" or d.type == "rock" or d.type == "flower" or d.type == "plant" then
+                objCount = objCount + 1
+            end
+        end
+    end
     nvgFontSize(ctx, 10)
-    nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgTextAlign(ctx, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
     nvgFillColor(ctx, nvgRGBA(170, 170, 170, 200))
-    nvgText(ctx, startX + totalW + 20, barY + TOOLBAR_H / 2, "物件总数: " .. count)
+    nvgText(ctx, logW - 12, barY + availH / 2, "物件总数: " .. objCount)
 end
 
 -- 区域工具栏: 舒适区类型/毒圈/出生点
@@ -1877,8 +2091,11 @@ function LevelEditor:ImportSeedCode(code)
     self.terrainExported = true
     self.seedCode = code
 
-    -- 更新导出代码以验证一致性
-    local verifyCode = self:EncodeSeed(seed, regionCount, transWidth, jitter)
+    -- 重新生成装饰物(只含地形物件: 树木/岩石/花朵/植物)
+    if RegenerateMapDecorations then
+        RegenerateMapDecorations()
+    end
+
     print("[编辑器] 导入种子代码: " .. code .. " → seed=" .. seed .. " regions=" .. regionCount)
     return true
 end

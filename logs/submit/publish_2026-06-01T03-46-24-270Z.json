@@ -1,0 +1,203 @@
+{
+  "startTime": "2026-06-01T03:46:24.270Z",
+  "endTime": "2026-06-01T03:47:17.035Z",
+  "duration": "52765ms",
+  "result": {
+    "success": false,
+    "error": "请求失败：400 Bad Request - banner 尺寸不得低于 1920*1080 px"
+  },
+  "steps": [
+    {
+      "time": "2026-06-01T03:46:24.447Z",
+      "stage": "upload_to_cdn",
+      "data": {
+        "status": "start"
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:12.050Z",
+      "stage": "upload_to_cdn",
+      "data": {
+        "status": "done"
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:12.050Z",
+      "stage": "network_config",
+      "data": {
+        "env": "production"
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:12.056Z",
+      "stage": "load_config",
+      "data": {
+        "projectId": "p_wkw1",
+        "configPath": "/userspaces/034eb62a-6159-4de4-b7e6-ab0efd0ae329/workspace/.project/project.json",
+        "taptap_publish": {
+          "title": "哎！你丫别跑！",
+          "description": "《哎！你丫别跑！》游戏简介\n\n《哎！你丫别跑！》是一款充满背叛、追逐与欢笑的多人生存派对游戏。\n\n在神秘毒雾笼罩的黑夜中，玩家将化身性格各异的猪猪角色，在不断缩小的毒圈内展开一场紧张刺激的生存竞赛。每轮开始后，危险的毒药会随机附着在玩家身上，只有通过追逐、碰撞或互动，才能将毒药转移给其他玩家。\n\n随着倒计时 5、4、3、2、1 结束，中毒者将遭受致命惩罚，而幸存者则继续迎接下一轮挑战。地图中的解药、舒适区、黑夜事件以及不断收缩的毒圈，都将改变局势，让每一次选择都充满变数。\n\n是选择相信队友，还是背后下手？\n是拼命逃跑，还是主动出击？\n当最后一秒到来时，没有人知道谁会成为下一个倒霉蛋。\n\n躲避毒药，陷害对手，活到最后！\n\n因为在这里——\n\n「毒药会轮换，友情会变质，而你最好别停下脚步！」\n\n《哎！你丫别跑！》\n一场关于追逐、欺骗与生存的欢乐大乱斗，即将开始。",
+          "category": "action",
+          "screen_orientation": "landscape",
+          "collection_type": "sce",
+          "trial_note": "做好玩法好体验，创新与自我反省，叫集反馈，总结复盘",
+          "app_platforms": "1,2",
+          "developer_id": 346789,
+          "app_id": 865291,
+          "miniapp_id": "tapmcq0elsqtj0gxkd",
+          "gameplay_demo_video_source": ""
+        },
+        "assets": {
+          "icon": "./game_material/icon.png",
+          "screenshots": [
+            "./game_material/screenshot_1.png",
+            "./game_material/SCREENSHOT_2026-06-01T03-30-41_02.png",
+            "./game_material/screenshot_3.png"
+          ],
+          "promotional_image": "./game_material/promotional.png",
+          "promotional_image_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/promotional.png",
+          "icon_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/icon.png",
+          "screenshot_urls": [
+            "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/screenshot_1.png",
+            "https://tapcode-sce.spark.xd.com/assets/game_material/哎！你丫别跑！/SCREENSHOT_2026-06-01T03-30-41_02.png",
+            "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/screenshot_3.png"
+          ],
+          "cover_horizontal": "./game_material/cover_horizontal.png",
+          "cover_horizontal_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/cover_horizontal.png",
+          "cover_vertical": "./game_material/cover_vertical.png",
+          "cover_vertical_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/cover_vertical.png"
+        }
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:12.361Z",
+      "stage": "update_game",
+      "data": {
+        "app_id": 865291,
+        "developer_id": 346789
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:12.374Z",
+      "stage": "upload_assets",
+      "data": {
+        "status": "start",
+        "assets": {
+          "icon": "./game_material/icon.png",
+          "screenshots": [
+            "./game_material/screenshot_1.png",
+            "./game_material/SCREENSHOT_2026-06-01T03-30-41_02.png",
+            "./game_material/screenshot_3.png"
+          ],
+          "promotional_image": "./game_material/promotional.png",
+          "promotional_image_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/promotional.png",
+          "icon_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/icon.png",
+          "screenshot_urls": [
+            "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/screenshot_1.png",
+            "https://tapcode-sce.spark.xd.com/assets/game_material/哎！你丫别跑！/SCREENSHOT_2026-06-01T03-30-41_02.png",
+            "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/screenshot_3.png"
+          ],
+          "cover_horizontal": "./game_material/cover_horizontal.png",
+          "cover_horizontal_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/cover_horizontal.png",
+          "cover_vertical": "./game_material/cover_vertical.png",
+          "cover_vertical_url": "https://tapcode-sce.spark.xd.com/assets/game_material/p_wkw1/cover_vertical.png"
+        }
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:15.451Z",
+      "stage": "upload_cover_horizontal",
+      "data": {
+        "path": "./game_material/cover_horizontal.png",
+        "resolvedPath": "/userspaces/034eb62a-6159-4de4-b7e6-ab0efd0ae329/workspace/game_material/cover_horizontal.png"
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:15.456Z",
+      "stage": "upload_cover_horizontal",
+      "data": {
+        "fileSize": 408500
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:16.083Z",
+      "stage": "upload_cover_horizontal",
+      "data": {
+        "response": {
+          "result": true,
+          "image_url": "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg"
+        }
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:16.083Z",
+      "stage": "upload_cover_vertical",
+      "data": {
+        "path": "./game_material/cover_vertical.png",
+        "resolvedPath": "/userspaces/034eb62a-6159-4de4-b7e6-ab0efd0ae329/workspace/game_material/cover_vertical.png"
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:16.086Z",
+      "stage": "upload_cover_vertical",
+      "data": {
+        "fileSize": 379484
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:16.490Z",
+      "stage": "upload_cover_vertical",
+      "data": {
+        "response": {
+          "result": true,
+          "image_url": "https://img-tc.tapimg.com/market/images/FrrXaKPlW1PyzWmiVHgjOWjgDK1S.jpg"
+        }
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:16.490Z",
+      "stage": "upload_assets",
+      "data": {
+        "status": "done",
+        "uploadedAssets": {
+          "iconUrl": "https://img-tc.tapimg.com/market/images/Fvq4mfhZxh7I1JYSjpQ3-Yck3Atc.png",
+          "screenshotUrls": [
+            "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg",
+            "https://img-tc.tapimg.com/market/images/Fo6WNxrBAKHS_nbjYbgIUIFR_PRs.png",
+            "https://img-tc.tapimg.com/market/images/FsxHP0xiYUkuN9272GkzzpEv1NwX.jpg"
+          ],
+          "bannerUrl": "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg",
+          "coverUrl": "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg",
+          "coverVerticalUrl": "https://img-tc.tapimg.com/market/images/FrrXaKPlW1PyzWmiVHgjOWjgDK1S.jpg"
+        }
+      }
+    },
+    {
+      "time": "2026-06-01T03:47:16.490Z",
+      "stage": "submit_spark_request",
+      "data": {
+        "app_id": 865291,
+        "developer_id": 346789,
+        "map_version": "1",
+        "sce_project_id": "p_wkw1",
+        "category": "action",
+        "collection_type": "action",
+        "description": "《哎！你丫别跑！》游戏简介\n\n《哎！你丫别跑！》是一款充满背叛、追逐与欢笑的多人生存派对游戏。\n\n在神秘毒雾笼罩的黑夜中，玩家将化身性格各异的猪猪角色，在不断缩小的毒圈内展开一场紧张刺激的生存竞赛。每轮开始后，危险的毒药会随机附着在玩家身上，只有通过追逐、碰撞或互动，才能将毒药转移给其他玩家。\n\n随着倒计时 5、4、3、2、1 结束，中毒者将遭受致命惩罚，而幸存者则继续迎接下一轮挑战。地图中的解药、舒适区、黑夜事件以及不断收缩的毒圈，都将改变局势，让每一次选择都充满变数。\n\n是选择相信队友，还是背后下手？\n是拼命逃跑，还是主动出击？\n当最后一秒到来时，没有人知道谁会成为下一个倒霉蛋。\n\n躲避毒药，陷害对手，活到最后！\n\n因为在这里——\n\n「毒药会轮换，友情会变质，而你最好别停下脚步！」\n\n《哎！你丫别跑！》\n一场关于追逐、欺骗与生存的欢乐大乱斗，即将开始。",
+        "screen_orientation": 2,
+        "title": "哎！你丫别跑！",
+        "icon": "https://img-tc.tapimg.com/market/images/Fvq4mfhZxh7I1JYSjpQ3-Yck3Atc.png",
+        "screenshots": [
+          "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg",
+          "https://img-tc.tapimg.com/market/images/Fo6WNxrBAKHS_nbjYbgIUIFR_PRs.png",
+          "https://img-tc.tapimg.com/market/images/FsxHP0xiYUkuN9272GkzzpEv1NwX.jpg"
+        ],
+        "banner": "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg",
+        "trial_note": "做好玩法好体验，创新与自我反省，叫集反馈，总结复盘",
+        "app_platforms": "1,2",
+        "cover": "https://img-tc.tapimg.com/market/images/Ft-PvWQqGvLud3vPXLueGoWw1fMi.jpg",
+        "cover_vertical": "https://img-tc.tapimg.com/market/images/FrrXaKPlW1PyzWmiVHgjOWjgDK1S.jpg",
+        "publish_intl": false
+      }
+    }
+  ]
+}

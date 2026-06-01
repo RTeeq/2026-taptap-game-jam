@@ -1,0 +1,161 @@
+[2026-05-31 06:39:26] 📋 ==================================================
+[2026-05-31 06:39:26] 📋 构建开始
+[2026-05-31 06:39:26] 📋 ==================================================
+[2026-05-31 06:39:26] 📋 日志文件: /workspace/logs/build/build_20260531_063926.log
+[2026-05-31 06:39:26] 📋 入口文件: /workspace/scripts/main.lua
+[2026-05-31 06:39:26] 📋 脚本目录: /workspace/scripts
+[2026-05-31 06:39:26] 📋 工作目录: /workspace
+[2026-05-31 06:39:26] 📋 MCP 环境: production
+[2026-05-31 06:39:26] 📋 构建参数: --no-7z --cooking-limit 10
+[2026-05-31 06:39:26] 📋 步骤 1+2: 验证入口 Lua 文件
+[2026-05-31 06:39:26] ✅ 入口文件验证通过
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.01s
+[2026-05-31 06:39:26] 📋 步骤 3: 验证 scripts 目录存在
+[2026-05-31 06:39:26] ✅ scripts 目录存在
+[2026-05-31 06:39:26] ⚠️ 发现 1 个超大 Lua 文件（>2000 行），建议进行模块化拆分重构：
+[2026-05-31 06:39:26] ⚠️   scripts/main.lua	7285 行
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.03s
+[2026-05-31 06:39:26] 📋 步骤 4: 启动 Lua LSP watch 模式
+[2026-05-31 06:39:26] 📋 LSP watch 已运行 (PID: 684)
+[2026-05-31 06:39:26] ✅ Lua LSP 检查通过: 0 个错误
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.02s
+[2026-05-31 06:39:26] 📋 步骤 5: 检查并初始化 .project 目录
+[2026-05-31 06:39:26] ✅ .project 目录已正确初始化
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.02s
+[2026-05-31 06:39:26] 📋 步骤 5.6: 检查/更新 multiplayer 配置
+[2026-05-31 06:39:26] ✅ 使用本地已有的 multiplayer 配置
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.02s
+[2026-05-31 06:39:26] 📋 步骤 6: 更新 project.json 的 entry
+[2026-05-31 06:39:26] 📋 更新 project.json: /workspace/.project/project.json
+[2026-05-31 06:39:26] 📋   设置 entry: main.lua
+[2026-05-31 06:39:26] ✅ project.json 更新完成
+[2026-05-31 06:39:26] 📋 步骤 6.1: 检查 project_id 一致性
+[2026-05-31 06:39:26] ✅ project_id 一致性检查通过: p_wkw1
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.06s
+[2026-05-31 06:39:26] 📋 步骤 6.2: 锁定游戏版本号
+[2026-05-31 06:39:26] 📋 本地版本 1.0.0 格式正常，跳过版本锁定
+[2026-05-31 06:39:26] 📋 ⏱️  耗时: 0.01s
+[2026-05-31 06:39:26] 📋 步骤 7: 调用 project_builder.py 进行构建
+[2026-05-31 06:39:26] 📋 已设置 AssetsCooking 可执行权限: /home/Maker/.sce/build/AssetsCooking
+[2026-05-31 06:39:26] 📋 已设置 TileTerrainCLI 可执行权限: /workspace/.cli/TileTerrainCLI
+[2026-05-31 06:39:26] 📋 已设置 download_tile_resources.py 可执行权限: /workspace/.cli/download_tile_resources.py
+[2026-05-31 06:39:26] 📋 执行脚本: /home/Maker/.sce/build/project_builder.py
+[2026-05-31 06:39:26] 📋 参数: --project /workspace --platform all --cooking /home/Maker/.sce/build/AssetsCooking --no-7z --cooking-limit 10
+[2026-05-31 06:39:26] 📋 Python: python3
+[2026-05-31 06:39:58] 📋 project_builder.py stdout:
+[2026-05-31 06:39:58] 📋   [INFO] 开始构建项目: /workspace [平台: all]
+[2026-05-31 06:39:58] 📋   [INFO] [1/17] 初始化构建目录...
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.01s)
+[2026-05-31 06:39:58] 📋   [INFO] [2/17] 加载配置...
+[2026-05-31 06:39:58] 📋   [INFO]   解析平台配置: all
+[2026-05-31 06:39:58] 📋   [WARN]   构建策略: 全量引用 — 检测到 groups 含全量通配 **，所有本地资源入包。如需裁剪未使用资源，请将 groups 改为具体模式（如 scripts/**）
+[2026-05-31 06:39:58] 📋   [INFO]   预下载: 未启用 — 检测到 preload_groups 为空，全部资源由引擎 DWP 按需下载
+[2026-05-31 06:39:58] 📋   [INFO]   项目: p_wkw1 v1.0.0
+[2026-05-31 06:39:58] 📋   [INFO]   入口: main.lua
+[2026-05-31 06:39:58] 📋   [INFO]   输出: /workspace/.project/../dist/1.0.0
+[2026-05-31 06:39:58] 📋   [INFO]   构建号: 150
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.01s)
+[2026-05-31 06:39:58] 📋   [INFO] [3/17] 加载远程资源...
+[2026-05-31 06:39:58] 📋   [INFO]   加载远端来源: engine (tag: stable)
+[2026-05-31 06:39:58] 📋   [INFO]     导入 4 个远端资源: engine
+[2026-05-31 06:39:58] 📋   [INFO]   加载远端来源: engine-res (tag: stable)
+[2026-05-31 06:39:58] 📋   [INFO]     导入 1168 个远端资源: engine-res
+[2026-05-31 06:39:58] 📋   [INFO]   加载远端来源: official-res (tag: stable)
+[2026-05-31 06:39:58] 📋   [INFO]     导入 38896 个远端资源: official-res
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (3.30s)
+[2026-05-31 06:39:58] 📋   [INFO] [4/17] 注入固定引用...
+[2026-05-31 06:39:58] 📋   [INFO]   已确认固定引用: 1 个（含已存在资源）
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.00s)
+[2026-05-31 06:39:58] 📋   [INFO] [5/17] 扫描本地资源...
+[2026-05-31 06:39:58] 📋   [INFO]   扫描目录: ../assets (prefix: ../assets)
+[2026-05-31 06:39:58] 📋   [INFO]   扫描目录: ../scripts (prefix: ../scripts)
+[2026-05-31 06:39:58] 📋   [INFO]   发现资源: 1685 个
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (12.95s)
+[2026-05-31 06:39:58] 📋   [INFO] [6/17] 处理配置文件运行时变体...
+[2026-05-31 06:39:58] 📋   [INFO]   处理配置文件运行时变体: settings.json
+[2026-05-31 06:39:58] 📋   [INFO]     UUID: iyAOUI8TTa2beREeghebJA, hash: 82e0a33f
+[2026-05-31 06:39:58] 📋   [INFO]     自动添加 #config 到 preload_groups
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.01s)
+[2026-05-31 06:39:58] 📋   [INFO] [7/17] 解析别名...
+[2026-05-31 06:39:58] 📋   [INFO]   解析别名: 0 个
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.00s)
+[2026-05-31 06:39:58] 📋   [INFO] [8/17] 分配分组...
+[2026-05-31 06:39:58] 📋   [INFO]   添加远端资源: 1168 个
+[2026-05-31 06:39:58] 📋   [INFO]   分组完成，总资源: 2854 个
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.01s)
+[2026-05-31 06:39:58] 📋   [INFO] [9/17] 展开引用...
+[2026-05-31 06:39:58] 📋   [INFO]   递归收集 uuid:// 和 alias:// 引用...（全量模式（兼容旧二进制））
+[2026-05-31 06:39:58] 📋   [INFO]   递归收集了 21 个被引用资源
+[2026-05-31 06:39:58] 📋   [INFO]   组继承: 44 个分组被传播
+[2026-05-31 06:39:58] 📋   [INFO]   #blocking 组: 824 个阻塞类型资源
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.02s)
+[2026-05-31 06:39:58] 📋   [INFO] [10/17] 扫描变体...
+[2026-05-31 06:39:58] 📋   [INFO]   完成 (0.00s)
+[2026-05-31 06:39:58] 📋   [INFO] [11/17] 国际化处理...
+[2026-05-31 06:39:58] 📋   [INFO]   跳过国际化：i18n.json enabled=false
+[2026-05-31 06:39:58] 📋   [WARN]   跳过（前置条件不满足） (0.00s)
+[2026-05-31 06:39:58] 📋   [INFO] [12/17] 标记修订...
+[2026-05-31 06:39:58] 📋   [WARN]   跳过（前置条件不满足） (0.00s)
+[2026-05-31 06:39:58] 📋   [INFO] [13/17] 资产烘焙...
+[2026-05-31 06:39:58] 📋   [INFO]   使用 AssetsCooking: /home/Maker/.sce/build/AssetsCooking
+[2026-05-31 06:39:58] 📋   [INFO]   发现 1645 个纹理文件
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_01_20260530223535.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_01_20260530223535.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_02_20260530223533.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_02_20260530223533.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_03_20260530223535.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_03_20260530223535.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_04_20260530223548.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_04_20260530223548.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_05_20260530223533.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_05_20260530223533.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_06_20260530223550.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_06_20260530223550.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_07_20260530223637.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_07_20260530223637.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_08_20260530223536.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_08_20260530223536.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_10_20260530223731.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_10_20260530223731.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_11_20260530223723.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_11_20260530223723.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_12_20260530223720.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_12_20260530223720.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_13_20260530223722.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_13_20260530223722.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_15_20260530223740.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_15_20260530223740.png'
+[2026-05-31 06:39:59] 📋   [WARN]     读取源文件失败: /workspace/.project/../assets/image/drink_green_16_20260530223720.png - [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_green_16_20260530223720.png'
+[2026-05-31 06:39:59] 📋   [INFO]   1645 个源文件: 缓存 193, 新增 25, 改动 1413
+[2026-05-31 06:39:59] 📋   [INFO]   提交 1438 个任务
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [ClDpqUJTYxtD5742q4eWKsN9_53777ce4@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [ClDpqUJTYxtD5742q4eWKsN9_53777ce4@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [ClDpqUJTYxtD5742q4eWKsN9_53777ce4@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [HPb-KUhtl5rr5svgJ-N8o5da_14fd7d11@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [HPb-KUhtl5rr5svgJ-N8o5da_14fd7d11@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [HPb-KUhtl5rr5svgJ-N8o5da_14fd7d11@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [BNna8ZsB8d7ZZCWeTaKY9Otm_97ea91ec@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [BNna8ZsB8d7ZZCWeTaKY9Otm_97ea91ec@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [BNna8ZsB8d7ZZCWeTaKY9Otm_97ea91ec@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [GMWACf8q_gI4mhQVdPsdE_ow_511865e2@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [GMWACf8q_gI4mhQVdPsdE_ow_511865e2@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [GMWACf8q_gI4mhQVdPsdE_ow_511865e2@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [Fz2tMRrQyRBfWs39B2-3higF_d2c15dbc@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [Fz2tMRrQyRBfWs39B2-3higF_d2c15dbc@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [Fz2tMRrQyRBfWs39B2-3higF_d2c15dbc@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [B9x1qcxnHz0guVEjtN4N50Fj_2a9e7285@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [B9x1qcxnHz0guVEjtN4N50Fj_2a9e7285@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [B9x1qcxnHz0guVEjtN4N50Fj_2a9e7285@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [BdkikZ4DLzP988j_ApJZCQlC_3bcd0e20@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [BdkikZ4DLzP988j_ApJZCQlC_3bcd0e20@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [BdkikZ4DLzP988j_ApJZCQlC_3bcd0e20@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [HfcukRtt5wcNScMtucMaS8QO_4b090907@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [HfcukRtt5wcNScMtucMaS8QO_4b090907@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [HfcukRtt5wcNScMtucMaS8QO_4b090907@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [EoguSWm8DOq367SrouakxSym_760d22e5@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [EoguSWm8DOq367SrouakxSym_760d22e5@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [EoguSWm8DOq367SrouakxSym_760d22e5@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [FrviEQAKl531MygM9C1ZOxPm_67b74e46@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [FrviEQAKl531MygM9C1ZOxPm_67b74e46@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [FrviEQAKl531MygM9C1ZOxPm_67b74e46@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [C8E5WUpAuC10iesYcHQZYa_l_a48da447@ios]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [C8E5WUpAuC10iesYcHQZYa_l_a48da447@android]: Texture file not found
+[2026-05-31 06:39:59] 📋   [WARN]     压缩失败 [C8E5WUpAuC10iesYcHQZYa_l_a48da447@windows]: Texture file not found
+[2026-05-31 06:39:59] 📋   [INFO]   烘培产物: 新增 10, 跳过 4266, 错误 33
+[2026-05-31 06:39:59] 📋   [WARN]   ⚠️ 33 个纹理压缩失败，请检查上方警告日志
+[2026-05-31 06:39:59] 📋   [INFO]   完成 (14.72s)
+[2026-05-31 06:39:59] 📋   [INFO] [14/17] 生成产物...
+[2026-05-31 06:39:59] 📋   [INFO]   清空版本目录: /workspace/.project/../dist/1.0.0
+[2026-05-31 06:39:59] 📋   [ERROR] 生成产物失败: [Errno 2] No such file or directory: '/workspace/.project/../assets/image/drink_07_20260530223803.png'
+[2026-05-31 06:39:59] 📋   [ERROR]   失败 (0.03s)
+[2026-05-31 06:39:59] 📋   [INFO] 总耗时: 31.08s
+[2026-05-31 06:39:59] 📋   [ERROR] 构建失败!
+[2026-05-31 06:39:59] 📋 ⏱️  耗时: 32.46s
+[2026-05-31 06:39:59] ❌ 构建失败: 脚本执行失败: 

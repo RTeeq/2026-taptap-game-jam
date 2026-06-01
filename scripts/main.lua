@@ -2782,6 +2782,9 @@ function Start()
     SubscribeToEvent("TouchEnd", "HandleTouchEnd")
     SubscribeToEvent("TouchMove", "HandleTouchMove")
 
+    -- 文本输入事件（导入对话框数字输入）
+    SubscribeToEvent("TextInput", "HandleTextInput")
+
     -- 手柄连接/断开事件
     SubscribeToEvent("JoystickConnected", "HandleJoystickConnected")
     SubscribeToEvent("JoystickDisconnected", "HandleJoystickDisconnected")
@@ -3471,6 +3474,15 @@ function HandleMouseUp(eventType, eventData)
 end
 
 ---@param eventType string
+---@param eventData TextInputEventData
+function HandleTextInput(eventType, eventData)
+    local text = eventData["Text"]:GetString()
+    if levelEditor and levelEditor:IsActive() then
+        levelEditor:HandleTextInput(text)
+    end
+end
+
+---@param eventType string
 ---@param eventData KeyDownEventData
 function HandleKeyDown(eventType, eventData)
     local key = eventData["Key"]:GetInt()
@@ -3805,6 +3817,14 @@ function ResetDecorations()
     decorationsGenerated = false
     mapDecorations = {}
     groundPatches = {}
+end
+
+-- 供编辑器导入种子后重新生成装饰物(只含地形物件，不含舒适区)
+function RegenerateMapDecorations()
+    decorationsGenerated = false
+    mapDecorations = {}
+    groundPatches = {}
+    -- 延迟到下一帧由渲染函数自动触发 generateMapDecorations()
 end
 
 -- 全局访问函数(供编辑器直接修改真实游戏数据)
@@ -5346,14 +5366,10 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
                 imgHandle = walkHandle
                 useAnimFrame = true
             end
-        elseif not isMoving and #warriorIdleFrames > 0 then
-            -- 待机时: 待机动画(4帧循环)
-            local frameIdx = math.floor(time * WARRIOR_IDLE_FPS) % #warriorIdleFrames + 1
-            local idleHandle = warriorIdleFrames[frameIdx]
-            if idleHandle and idleHandle ~= 0 and idleHandle ~= -1 then
-                imgHandle = idleHandle
-                useAnimFrame = true
-            end
+        elseif not isMoving then
+            -- 待机时: 使用 pig_warrior.png 静态图片(初始状态)
+            imgHandle = pigImages[p.avatarIdx]
+            useAnimFrame = false
         end
     elseif p.avatarIdx == 3 then
         -- 科学家猪(avatarIdx=3)动画帧系统
@@ -5412,9 +5428,20 @@ function drawPlayerDST(ctx, p, ox, oy, isDay)
         end
     end
 
-    -- 统一所有动画帧与静态立绘使用相同渲染尺寸(保持初始帧比例一致)
+    -- 根据角色动画帧比例设置渲染尺寸(避免拉伸变形)
     local imgW = 72
     local imgH = 72
+    if p.avatarIdx == 2 then
+        -- 战士猪: walk帧为512x869(竖长), 按比例渲染
+        if useAnimFrame then
+            imgW = 54
+            imgH = 92  -- 54 * (869/512) ≈ 92
+        else
+            -- 静态 pig_warrior.png 是 1024x1024, 但角色内容偏竖长, 微调
+            imgW = 64
+            imgH = 80
+        end
+    end
     local imgX = sx - imgW / 2
     local imgY = baseY - imgH + bendOffset  -- 脚底对齐世界坐标
 
