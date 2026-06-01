@@ -6,6 +6,7 @@
 
 require "LuaScripts/Utilities/Sample"
 local UI = require("urhox-libs/UI")
+local IDEMain = require("IDE.IDEMain")
 
 -- ============================================================================
 -- 全局常量
@@ -2755,6 +2756,9 @@ function Start()
         circle = circle,
     })
 
+    -- 初始化2D可视化IDE (F4切换, 含关卡编辑器)
+    IDEMain.Init(nvgContext, { levelEditor = levelEditor })
+
     -- 初始化UI
     InitGameUI()
 
@@ -2777,6 +2781,7 @@ function Start()
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent("MouseButtonDown", "HandleMouseDown")
     SubscribeToEvent("MouseButtonUp", "HandleMouseUp")
+    SubscribeToEvent("MouseWheel", "HandleMouseWheel")
     SubscribeToEvent("KeyDown", "HandleKeyDown")
     SubscribeToEvent("TouchBegin", "HandleTouchBegin")
     SubscribeToEvent("TouchEnd", "HandleTouchEnd")
@@ -3181,15 +3186,22 @@ end
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
 
-    -- 背景音乐切歌检测
-    updateBgm()
+    -- IDE更新(激活时拦截游戏输入, 含关卡编辑器)
+    if IDEMain.IsActive() then
+        local dpr = graphics:GetDPR()
+        IDEMain.Update(dt, input, dpr)
+        return  -- IDE激活时暂停游戏逻辑
+    end
 
-    -- 关卡编辑器更新(激活时拦截游戏输入)
+    -- 关卡编辑器独立模式(IDE未激活时的兼容路径)
     if levelEditor and levelEditor:IsActive() then
         local dpr = graphics:GetDPR()
         levelEditor:Update(dt, input, dpr)
-        return  -- 编辑器激活时暂停游戏逻辑
+        return
     end
+
+    -- 背景音乐切歌检测(仅游戏运行时)
+    updateBgm()
 
     -- 10.2 毒值警告cooldown
     if poisonWarnCooldown > 0 then poisonWarnCooldown = poisonWarnCooldown - dt end
@@ -3430,7 +3442,13 @@ end
 function HandleMouseDown(eventType, eventData)
     local button = eventData["Button"]:GetInt()
 
-    -- 编辑器激活时拦截鼠标
+    -- IDE激活时拦截鼠标(含关卡编辑器)
+    if IDEMain.IsActive() then
+        IDEMain.HandleMouseDown(button)
+        return
+    end
+
+    -- 关卡编辑器独立模式
     if levelEditor and levelEditor:IsActive() then
         levelEditor:HandleMouseDown(button)
         return
@@ -3468,8 +3486,23 @@ end
 
 function HandleMouseUp(eventType, eventData)
     local button = eventData["Button"]:GetInt()
+    -- IDE激活时拦截鼠标(含关卡编辑器)
+    if IDEMain.IsActive() then
+        IDEMain.HandleMouseUp(button)
+        return
+    end
+    -- 关卡编辑器独立模式
     if levelEditor and levelEditor:IsActive() then
         levelEditor:HandleMouseUp(button)
+        return
+    end
+end
+
+function HandleMouseWheel(eventType, eventData)
+    local wheel = eventData["Wheel"]:GetInt()
+    if IDEMain.IsActive() then
+        IDEMain.HandleMouseWheel(wheel)
+        return
     end
 end
 
@@ -3477,6 +3510,11 @@ end
 ---@param eventData TextInputEventData
 function HandleTextInput(eventType, eventData)
     local text = eventData["Text"]:GetString()
+    -- IDE 激活时转发文本输入
+    if IDEMain.IsActive() then
+        IDEMain.HandleTextInput(text)
+        return
+    end
     if levelEditor and levelEditor:IsActive() then
         levelEditor:HandleTextInput(text)
     end
@@ -3487,23 +3525,62 @@ end
 function HandleKeyDown(eventType, eventData)
     local key = eventData["Key"]:GetInt()
 
-    -- F3 键: 切换关卡编辑器
+    -- F3 键: 打开IDE并直接进入关卡模式(快捷入口)
     if key == KEY_F3 then
-        if levelEditor then
-            local isOpen = levelEditor:Toggle()
-            print(isOpen and "[编辑器] 已打开 - Tab切模式, Enter应用" or "[编辑器] 已关闭")
-            -- 隐藏/显示游戏UI组件
-            if uiRoot_ then
-                local hud = uiRoot_:FindById("hudPanel")
-                if hud then hud:SetVisible(not isOpen) end
-                local inv = uiRoot_:FindById("inventoryPanel")
-                if inv then inv:SetVisible(false) end
+        if not IDEMain.IsActive() then
+            IDEMain.Toggle()                    -- 打开IDE
+            IDEMain.SwitchToLevel()             -- 切到关卡模式
+        else
+            -- IDE已打开时, F3切到关卡模式或关闭IDE
+            if IDEMain.GetMode() == "level" then
+                IDEMain.Toggle()                -- 关闭IDE
+            else
+                IDEMain.SwitchToLevel()         -- 切到关卡模式
             end
+        end
+        -- 暂停/恢复游戏音乐(通过静音实现)
+        if bgmSource then
+            if IDEMain.IsActive() then
+                bgmSource:SetGain(0)
+            else
+                bgmSource:SetGain(0.5)
+            end
+        end
+        if uiRoot_ then
+            local hud = uiRoot_:FindById("hudPanel")
+            if hud then hud:SetVisible(not IDEMain.IsActive()) end
+            local inv = uiRoot_:FindById("inventoryPanel")
+            if inv then inv:SetVisible(false) end
         end
         return
     end
 
-    -- 编辑器激活时, 优先处理编辑器按键
+    -- F4 键: 切换2D可视化IDE
+    if key == KEY_F4 then
+        IDEMain.Toggle()
+        print(IDEMain.IsActive() and "[IDE] 已打开 - Tab切模式, 1-6快速创建节点" or "[IDE] 已关闭")
+        -- 暂停/恢复游戏音乐(通过静音实现)
+        if bgmSource then
+            if IDEMain.IsActive() then
+                bgmSource:SetGain(0)
+            else
+                bgmSource:SetGain(0.5)
+            end
+        end
+        if uiRoot_ then
+            local hud = uiRoot_:FindById("hudPanel")
+            if hud then hud:SetVisible(not IDEMain.IsActive()) end
+        end
+        return
+    end
+
+    -- IDE激活时拦截按键(含关卡编辑器)
+    if IDEMain.IsActive() then
+        IDEMain.HandleKeyDown(key)
+        return
+    end
+
+    -- 关卡编辑器独立模式
     if levelEditor and levelEditor:IsActive() then
         if levelEditor:HandleKeyDown(key) then return end
     end
@@ -3971,9 +4048,29 @@ end
 
 function HandleRender(eventType, eventData)
     if nvgContext == nil then return end
-    if gamePhase == "menu" then return end
 
-    if gamePhase == "victory" or gamePhase == "defeat" then
+    -- IDE激活时: 节点模式只渲染IDE界面; 关卡/场景模式先渲染游戏世界再叠加IDE
+    if IDEMain.IsActive() then
+        local ideMode = IDEMain.GetMode()
+        if ideMode == "node" then
+            -- 节点编辑器: 独立画布, 不需要游戏世界
+            local graphics = GetGraphics()
+            local screenW = graphics:GetWidth()
+            local screenH = graphics:GetHeight()
+            local dpr = graphics:GetDPR()
+            local logW = screenW / dpr
+            local logH = screenH / dpr
+            nvgBeginFrame(nvgContext, logW, logH, dpr)
+            IDEMain.Render(logW, logH, dpr)
+            nvgEndFrame(nvgContext)
+            return
+        end
+        -- 关卡/场景模式: 走下面的游戏世界渲染流程, 最后叠加IDE覆盖层
+    end
+
+    if gamePhase == "menu" and not IDEMain.IsActive() then return end
+
+    if not IDEMain.IsActive() and (gamePhase == "victory" or gamePhase == "defeat") then
         local graphics = GetGraphics()
         local screenW = graphics:GetWidth()
         local screenH = graphics:GetHeight()
@@ -4011,11 +4108,18 @@ function HandleRender(eventType, eventData)
     end
     -- ===== 相机缩放(编辑器激活时使用编辑器缩放, 否则2x) =====
     local CAM_ZOOM = 2.0
-    if levelEditor and levelEditor:IsActive() then
+    local camX, camY = camera.x, camera.y
+    if IDEMain.IsActive() and levelEditor then
         CAM_ZOOM = 2.0 * levelEditor.editorZoom
+        camX = levelEditor.editorCamX
+        camY = levelEditor.editorCamY
+    elseif levelEditor and levelEditor:IsActive() then
+        CAM_ZOOM = 2.0 * levelEditor.editorZoom
+        camX = levelEditor.editorCamX
+        camY = levelEditor.editorCamY
     end
-    local offsetX = logW / 2 / CAM_ZOOM - camera.x + shakeOX
-    local offsetY = logH / 2 / CAM_ZOOM - camera.y + shakeOY
+    local offsetX = logW / 2 / CAM_ZOOM - camX + shakeOX
+    local offsetY = logH / 2 / CAM_ZOOM - camY + shakeOY
 
     -- 应用缩放变换(世界渲染区域)
     nvgSave(nvgContext)
@@ -4057,8 +4161,12 @@ function HandleRender(eventType, eventData)
     -- 恢复缩放变换(后续HUD在屏幕空间绘制)
     nvgRestore(nvgContext)
 
-    -- 编辑器激活时: 跳过所有游戏UI, 只渲染编辑器覆盖
-    if levelEditor and levelEditor:IsActive() then
+    -- IDE/编辑器激活时: 跳过所有游戏UI, 渲染编辑器覆盖
+    if IDEMain.IsActive() then
+        -- IDE统一覆盖层(含关卡编辑器工具+IDE工具栏)
+        IDEMain.Render(logW, logH, dpr)
+    elseif levelEditor and levelEditor:IsActive() then
+        -- 独立关卡编辑器兼容路径
         levelEditor:Render(logW, logH, dpr)
     else
         -- 7. 暗角效果(Vignette)

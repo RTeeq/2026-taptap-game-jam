@@ -18,6 +18,11 @@ local MODE_ZONE    = 3    -- 区域(舒适区/毒圈/出生点)
 
 local MODE_NAMES = { "地形", "物件", "区域" }
 
+-- 高层编辑模式: 绘制 vs 编辑
+local EDITOR_MODE_DRAW = 1   -- 绘制模式(绘制地形/放置物件/放置区域)
+local EDITOR_MODE_EDIT = 2   -- 编辑模式(选择/移动/缩放/旋转/删除)
+local EDITOR_MODE_NAMES = { "绘制", "编辑" }
+
 -- 物件子类型
 local OBJ_TREE = 1
 local OBJ_ROCK = 2
@@ -149,12 +154,23 @@ function LevelEditor.New(vg, config)
     self.mapOriginX = centerX - self.mapPixelSize / 2
     self.mapOriginY = centerY - self.mapPixelSize / 2
 
-    -- 编辑模式
+    -- 高层编辑模式(绘制/编辑)
+    self.editorMode = EDITOR_MODE_DRAW
+
+    -- 子模式(地形/物件/区域)
     self.mode = MODE_TERRAIN
     self.objType = OBJ_TREE
     self.objAssetIdx = 1       -- 当前选中的物件资产索引(对应OBJ_ASSETS)
     self.zoneType = ZONE_COMFORT
     self.comfortType = 1
+
+    -- 编辑模式下的对象操作状态
+    self.editSelected = nil     -- 选中的对象 { type="object"|"comfort", idx=N }
+    self.editAction = nil       -- 当前操作: "move"|"scale"|"rotate"|nil
+    self.editOrigScale = 1.0    -- 缩放/旋转前的原始值
+    self.editOrigAngle = 0
+    self.editDragOffX = 0
+    self.editDragOffY = 0
 
     -- 地形瓦片(地形模式专用) — 每格64px, 以毒圈中心为基准
     local tilePixel = 64
@@ -180,6 +196,7 @@ function LevelEditor.New(vg, config)
     self.editorZoom = 1.0
     self.savedCamX = 0
     self.savedCamY = 0
+    self.paletteScrollY = 0  -- 底部调色板滚动偏移
 
     -- 画笔状态(地形)
     self.currentBrush = 1
@@ -347,13 +364,34 @@ function LevelEditor:HandleKeyDown(key)
         return true
     end
 
-    -- Tab: 切换模式
+    -- Tab: 切换子模式(仅绘制模式) 或 切换绘制/编辑
     if key == KEY_TAB then
-        self.mode = self.mode % 3 + 1
-        self.isPainting = false
-        self.dragging = false
-        self.selectedIdx = nil
-        self.selectedType = nil
+        if self.editorMode == EDITOR_MODE_DRAW then
+            self.mode = self.mode % 3 + 1
+            self.isPainting = false
+            self.dragging = false
+            self.selectedIdx = nil
+            self.selectedType = nil
+        else
+            -- 编辑模式下Tab切回绘制模式
+            self.editorMode = EDITOR_MODE_DRAW
+            self.editSelected = nil
+            self.editAction = nil
+        end
+        return true
+    end
+
+    -- Q: 快速切换绘制/编辑模式
+    if key == KEY_Q then
+        if self.editorMode == EDITOR_MODE_DRAW then
+            self.editorMode = EDITOR_MODE_EDIT
+            self.isPainting = false
+            self.dragging = false
+        else
+            self.editorMode = EDITOR_MODE_DRAW
+            self.editSelected = nil
+            self.editAction = nil
+        end
         return true
     end
 
@@ -396,7 +434,30 @@ function LevelEditor:HandleKeyDown(key)
         end
     end
 
-    -- 物件模式
+    -- 编辑模式快捷键
+    if self.editorMode == EDITOR_MODE_EDIT then
+        if key == KEY_DELETE or key == KEY_BACKSPACE then
+            self:EditModeDeleteSelected()
+            return true
+        end
+        -- R: 旋转选中对象 +15度
+        if key == KEY_R then
+            self:EditModeRotateSelected(15)
+            return true
+        end
+        -- +/-: 缩放选中对象
+        if key == KEY_EQUALS then  -- + key
+            self:EditModeScaleSelected(1.1)
+            return true
+        end
+        if key == KEY_MINUS then
+            self:EditModeScaleSelected(0.9)
+            return true
+        end
+        return false
+    end
+
+    -- 物件模式(绘制模式下)
     if self.mode == MODE_OBJECT then
         if key == KEY_DELETE or key == KEY_BACKSPACE then
             self:DeleteSelected()
@@ -404,7 +465,7 @@ function LevelEditor:HandleKeyDown(key)
         end
     end
 
-    -- 区域模式
+    -- 区域模式(绘制模式下)
     if self.mode == MODE_ZONE then
         if key == KEY_DELETE or key == KEY_BACKSPACE then
             self:DeleteSelected()
@@ -463,19 +524,30 @@ function LevelEditor:HandleMouseDown(button, mx, my)
         end
 
         -- 世界区域操作
-        if self.mode == MODE_TERRAIN then
-            self.isPainting = true
-        elseif self.mode == MODE_OBJECT then
-            self:HandleObjectMouseDown()
-        elseif self.mode == MODE_ZONE then
-            self:HandleZoneMouseDown()
+        if self.editorMode == EDITOR_MODE_DRAW then
+            -- 绘制模式: 绘制地形/放置物件/放置区域
+            if self.mode == MODE_TERRAIN then
+                self.isPainting = true
+            elseif self.mode == MODE_OBJECT then
+                self:HandleObjectMouseDown()
+            elseif self.mode == MODE_ZONE then
+                self:HandleZoneMouseDown()
+            end
+        else
+            -- 编辑模式: 选择/移动对象
+            self:HandleEditModeMouseDown()
         end
         return true
     elseif button == MOUSEB_RIGHT then
-        if self.mode == MODE_OBJECT then
-            self:DeleteAtCursor()
-        elseif self.mode == MODE_ZONE and self.zoneType == ZONE_COMFORT then
-            self:DeleteComfortAtCursor()
+        if self.editorMode == EDITOR_MODE_DRAW then
+            if self.mode == MODE_OBJECT then
+                self:DeleteAtCursor()
+            elseif self.mode == MODE_ZONE and self.zoneType == ZONE_COMFORT then
+                self:DeleteComfortAtCursor()
+            end
+        else
+            -- 编辑模式右键: 删除选中对象
+            self:EditModeDeleteSelected()
         end
         return true
     end
@@ -488,6 +560,7 @@ function LevelEditor:HandleMouseUp(button)
         self.isPainting = false
         self.dragging = false
         self.dragTarget = nil
+        self.editAction = nil
         return true
     end
     return false
@@ -653,42 +726,71 @@ end
 
 function LevelEditor:HandleToolbarClick(mx, my, logW, logH)
     local barY = logH - TOOLBAR_H
-    local relY = my - barY
 
-    -- 底部模式切换Tab区域（左下角36px）
-    local modeBarY = logH - 36
-    if my >= modeBarY then
-        local tabW = 64
-        local tabStartX = 8
-        for i = 1, 3 do
-            local bx = tabStartX + (i - 1) * tabW + 2
-            local bw = tabW - 4
-            if mx >= bx and mx < bx + bw then
-                self.mode = i
+    -- 左侧竖排模式切换Tab区域（80px宽）
+    local tabAreaW = 80
+    local tabH = 32
+    local tabPad = 6
+
+    -- 顶部: 绘制/编辑模式按钮(水平排列两个按钮)
+    local modeBtnH = 26
+    local modeBtnW = 34
+    local modeBtnY = barY + 8
+    local modeBtnGap = 4
+    local modeBtnStartX = 6
+    if mx < tabAreaW and my >= modeBtnY and my < modeBtnY + modeBtnH then
+        for i = 1, 2 do
+            local bx = modeBtnStartX + (i - 1) * (modeBtnW + modeBtnGap)
+            if mx >= bx and mx < bx + modeBtnW then
+                self.editorMode = i
+                self.editSelected = nil
+                self.editAction = nil
                 self.isPainting = false
                 self.dragging = false
-                self.selectedIdx = nil
-                self.selectedType = nil
                 return
             end
         end
         return
     end
 
+    -- 下方: 地形/物件/区域 Tab (仅在绘制模式下显示)
+    local tabStartY = barY + 8 + modeBtnH + 8
+    if mx < tabAreaW and self.editorMode == EDITOR_MODE_DRAW then
+        for i = 1, 3 do
+            local by = tabStartY + (i - 1) * (tabH + tabPad)
+            if my >= by and my < by + tabH then
+                self.mode = i
+                self.isPainting = false
+                self.dragging = false
+                self.selectedIdx = nil
+                self.selectedType = nil
+                self.paletteScrollY = 0  -- 切换模式重置滚动
+                return
+            end
+        end
+        return
+    end
+
+    -- 编辑模式左侧区域: 无需再处理子Tab
+    if mx < tabAreaW then
+        return
+    end
+
+    -- 右侧内容区域
+    local contentX = tabAreaW + 8
+    local contentY = barY + 8
+    local contentW = logW - contentX - 8
+    local contentH = TOOLBAR_H - 16
+
     if self.mode == MODE_TERRAIN then
-        -- 地形格子（8列布局，与渲染一致）
-        local cols = 8
+        local cellSize = 56
+        local padX = 6
+        local padY = 4
+        local labelH = 14
+        local cols = math.max(1, math.floor((contentW + padX) / (cellSize + padX)))
         local count = TERRAIN_BRUSH_COUNT
-        local rows = math.ceil(count / cols)
-        local cellSize = 36
-        local padX = 4
-        local padY = 3
-        local labelH = 11
-        local totalW = cols * cellSize + (cols - 1) * padX
-        local totalH = rows * (cellSize + labelH) + (rows - 1) * padY
-        local startX = (logW - totalW) / 2
-        local availH = TOOLBAR_H - 36
-        local startY = barY + (availH - totalH) / 2
+        local startX = contentX
+        local startY = contentY - self.paletteScrollY
 
         for i = 1, count do
             local col = ((i - 1) % cols)
@@ -696,24 +798,21 @@ function LevelEditor:HandleToolbarClick(mx, my, logW, logH)
             local cx = startX + col * (cellSize + padX)
             local cellY = startY + row * (cellSize + labelH + padY)
             if mx >= cx and mx < cx + cellSize and my >= cellY and my < cellY + cellSize + labelH then
-                self.currentBrush = i
-                return
+                if my >= contentY and my < contentY + contentH then
+                    self.currentBrush = i
+                    return
+                end
             end
         end
     elseif self.mode == MODE_OBJECT then
-        -- 物件资产网格点击（与渲染一致）
-        local cols = 7
-        local count = OBJ_ASSET_COUNT
-        local rows = math.ceil(count / cols)
-        local cellSize = 48
+        local cellSize = 56
         local padX = 6
         local padY = 4
-        local labelH = 12
-        local totalW = cols * cellSize + (cols - 1) * padX
-        local totalH = rows * (cellSize + labelH) + (rows - 1) * padY
-        local startX = (logW - totalW) / 2
-        local availH = TOOLBAR_H - 36
-        local startY = barY + (availH - totalH) / 2
+        local labelH = 14
+        local cols = math.max(1, math.floor((contentW + padX) / (cellSize + padX)))
+        local count = OBJ_ASSET_COUNT
+        local startX = contentX
+        local startY = contentY - self.paletteScrollY
 
         for i = 1, count do
             local col = ((i - 1) % cols)
@@ -721,24 +820,32 @@ function LevelEditor:HandleToolbarClick(mx, my, logW, logH)
             local cx = startX + col * (cellSize + padX)
             local cellY = startY + row * (cellSize + labelH + padY)
             if mx >= cx and mx < cx + cellSize and my >= cellY and my < cellY + cellSize + labelH then
-                self.objAssetIdx = i
-                local asset = OBJ_ASSETS[i]
-                if asset.type == "tree" then self.objType = OBJ_TREE
-                elseif asset.type == "rock" then self.objType = OBJ_ROCK
-                elseif asset.type == "flower" then self.objType = OBJ_FLOWER
-                elseif asset.type == "plant" then self.objType = OBJ_PLANT
+                if my >= contentY and my < contentY + contentH then
+                    self.objAssetIdx = i
+                    local asset = OBJ_ASSETS[i]
+                    if asset.type == "tree" then self.objType = OBJ_TREE
+                    elseif asset.type == "rock" then self.objType = OBJ_ROCK
+                    elseif asset.type == "flower" then self.objType = OBJ_FLOWER
+                    elseif asset.type == "plant" then self.objType = OBJ_PLANT
+                    end
+                    return
                 end
-                return
             end
         end
     elseif self.mode == MODE_ZONE then
-        -- 5个区域按钮: 篝火/清泉/圣坛/毒圈/出生点
-        local cellW = 64
-        local totalW = cellW * 5 + 10 * 4
-        local startX = (logW - totalW) / 2
-        for i = 1, 5 do
-            local cx = startX + (i - 1) * (cellW + 10)
-            if mx >= cx and mx < cx + cellW then
+        -- 区域按钮: 左对齐网格布局
+        local cellSize = 56
+        local padX = 6
+        local padY = 4
+        local labelH = 14
+        local zoneCount = 5
+        local cols = math.max(1, math.floor((contentW + padX) / (cellSize + padX)))
+        for i = 1, zoneCount do
+            local col = (i - 1) % cols
+            local row = math.floor((i - 1) / cols)
+            local cx = contentX + col * (cellSize + padX)
+            local cy = contentY + row * (cellSize + labelH + padY) - self.paletteScrollY
+            if mx >= cx and mx < cx + cellSize and my >= cy and my < cy + cellSize then
                 if i <= 3 then
                     self.zoneType = ZONE_COMFORT
                     self.comfortType = i
@@ -808,10 +915,20 @@ function LevelEditor:Update(dt, inputRef, dpr)
         self.editorCamX = self.editorCamX + speed
     end
 
-    -- 滚轮缩放
+    -- 滚轮: 底部面板区域滚动调色板，地图区域平滑缩放
     local wheel = inputRef.mouseMoveWheel or 0
     if wheel ~= 0 then
-        self.editorZoom = math.max(0.3, math.min(4.0, self.editorZoom + wheel * 0.15))
+        local my = inputRef.mousePosition.y / dpr
+        local barY = self._lastLogH and (self._lastLogH - TOOLBAR_H) or 0
+        if self._lastLogH and my >= barY then
+            -- 在底部面板区域 → 滚动调色板
+            self.paletteScrollY = self.paletteScrollY - wheel * 30
+            if self.paletteScrollY < 0 then self.paletteScrollY = 0 end
+        else
+            -- 在地图区域 → 平滑缩放
+            local zoomSpeed = self.editorZoom * 0.1
+            self.editorZoom = math.max(0.3, math.min(4.0, self.editorZoom + wheel * zoomSpeed))
+        end
     end
 
     -- 同步编辑器相机到游戏相机
@@ -835,12 +952,20 @@ function LevelEditor:Update(dt, inputRef, dpr)
         self.terrainExported = true
     end
 
-    -- 物件/区域拖拽
+    -- 物件/区域拖拽(绘制模式)
     if self.dragging then
         local mx = inputRef.mousePosition.x / dpr
         local my = inputRef.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(mx, my, dpr)
         self:HandleDrag(wx, wy)
+    end
+
+    -- 编辑模式拖拽(移动对象)
+    if self.editorMode == EDITOR_MODE_EDIT and self.editAction == "move" and self.editSelected then
+        local mx = inputRef.mousePosition.x / dpr
+        local my = inputRef.mousePosition.y / dpr
+        local wx, wy = self:ScreenToWorld(mx, my, dpr)
+        self:HandleEditModeDrag(wx, wy)
     end
 end
 
@@ -1115,6 +1240,131 @@ function LevelEditor:DeleteComfortAtCursor()
 end
 
 -- ============================================================================
+-- 编辑模式操作
+-- ============================================================================
+
+--- 编辑模式: 鼠标按下(选择对象/开始移动)
+function LevelEditor:HandleEditModeMouseDown()
+    local dpr = graphics:GetDPR()
+    local mx = input.mousePosition.x / dpr
+    local my = input.mousePosition.y / dpr
+    local wx, wy = self:ScreenToWorld(mx, my, dpr)
+
+    -- 尝试点选物件
+    local decos = self:GetMapDecorations()
+    if decos then
+        for i = #decos, 1, -1 do
+            local obj = decos[i]
+            local dx = obj.x - wx
+            local dy = obj.y - wy
+            local hitR = (obj.type == "tree") and 30 or (obj.size or 15)
+            if dx * dx + dy * dy < hitR * hitR then
+                self.editSelected = { type = "object", idx = i }
+                self.editAction = "move"
+                self.editDragOffX = obj.x - wx
+                self.editDragOffY = obj.y - wy
+                return
+            end
+        end
+    end
+
+    -- 尝试点选舒适区
+    local zones = self:GetComfortZones()
+    if zones then
+        for i = #zones, 1, -1 do
+            local z = zones[i]
+            local dx = z.x - wx
+            local dy = z.y - wy
+            if dx * dx + dy * dy < 60 * 60 then
+                self.editSelected = { type = "comfort", idx = i }
+                self.editAction = "move"
+                self.editDragOffX = z.x - wx
+                self.editDragOffY = z.y - wy
+                return
+            end
+        end
+    end
+
+    -- 点击空白处: 取消选择
+    self.editSelected = nil
+    self.editAction = nil
+end
+
+--- 编辑模式: 拖拽移动
+function LevelEditor:HandleEditModeDrag(wx, wy)
+    if not self.editSelected then return end
+
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        if decos and decos[self.editSelected.idx] then
+            decos[self.editSelected.idx].x = wx + self.editDragOffX
+            decos[self.editSelected.idx].y = wy + self.editDragOffY
+        end
+    elseif self.editSelected.type == "comfort" then
+        local zones = self:GetComfortZones()
+        if zones and zones[self.editSelected.idx] then
+            zones[self.editSelected.idx].x = wx + self.editDragOffX
+            zones[self.editSelected.idx].y = wy + self.editDragOffY
+        end
+    end
+end
+
+--- 编辑模式: 删除选中对象
+function LevelEditor:EditModeDeleteSelected()
+    if not self.editSelected then return end
+
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        if decos and decos[self.editSelected.idx] then
+            table.remove(decos, self.editSelected.idx)
+            print("[编辑器] 编辑模式: 删除物件#" .. self.editSelected.idx)
+        end
+    elseif self.editSelected.type == "comfort" then
+        local zones = self:GetComfortZones()
+        if zones and zones[self.editSelected.idx] then
+            table.remove(zones, self.editSelected.idx)
+            print("[编辑器] 编辑模式: 删除舒适区#" .. self.editSelected.idx)
+        end
+    end
+    self.editSelected = nil
+    self.editAction = nil
+end
+
+--- 编辑模式: 缩放选中对象
+function LevelEditor:EditModeScaleSelected(factor)
+    if not self.editSelected then return end
+
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        local obj = decos and decos[self.editSelected.idx]
+        if obj then
+            if obj.type == "tree" then
+                obj.height = (obj.height or 80) * factor
+            else
+                obj.size = (obj.size or 15) * factor
+            end
+            print(string.format("[编辑器] 缩放: %.1fx", factor))
+        end
+    elseif self.editSelected.type == "comfort" then
+        -- 舒适区暂不支持缩放
+    end
+end
+
+--- 编辑模式: 旋转选中对象
+function LevelEditor:EditModeRotateSelected(degrees)
+    if not self.editSelected then return end
+
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        local obj = decos and decos[self.editSelected.idx]
+        if obj then
+            obj.angle = (obj.angle or 0) + degrees
+            print(string.format("[编辑器] 旋转: %d°", obj.angle))
+        end
+    end
+end
+
+-- ============================================================================
 -- 访问游戏真实数据
 -- ============================================================================
 
@@ -1248,8 +1498,8 @@ function LevelEditor:Render(logW, logH, dpr)
         end
     end
 
-    -- 地形画笔光标
-    if self.mode == MODE_TERRAIN then
+    -- 地形画笔光标(仅绘制模式)
+    if self.editorMode == EDITOR_MODE_DRAW and self.mode == MODE_TERRAIN then
         local pmx = input.mousePosition.x / dpr
         local pmy = input.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(pmx, pmy, dpr)
@@ -1269,8 +1519,8 @@ function LevelEditor:Render(logW, logH, dpr)
         nvgStroke(ctx)
     end
 
-    -- 物件放置光标
-    if self.mode == MODE_OBJECT and not self.dragging then
+    -- 物件放置光标(仅绘制模式)
+    if self.editorMode == EDITOR_MODE_DRAW and self.mode == MODE_OBJECT and not self.dragging then
         local pmx = input.mousePosition.x / dpr
         local pmy = input.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(pmx, pmy, dpr)
@@ -1287,7 +1537,7 @@ function LevelEditor:Render(logW, logH, dpr)
     end
 
     -- 舒适区放置光标
-    if self.mode == MODE_ZONE and self.zoneType == ZONE_COMFORT and not self.dragging then
+    if self.editorMode == EDITOR_MODE_DRAW and self.mode == MODE_ZONE and self.zoneType == ZONE_COMFORT and not self.dragging then
         local pmx = input.mousePosition.x / dpr
         local pmy = input.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(pmx, pmy, dpr)
@@ -1296,6 +1546,72 @@ function LevelEditor:Render(logW, logH, dpr)
         nvgStrokeColor(ctx, nvgRGBA(255, 200, 50, 100))
         nvgStrokeWidth(ctx, 1.5 / totalZoom)
         nvgStroke(ctx)
+    end
+
+    -- ===== 编辑模式: 所有可选对象高亮 + 选中对象强高亮 =====
+    if self.editorMode == EDITOR_MODE_EDIT then
+        -- 所有物件显示可选框(淡蓝)
+        local decos = self:GetMapDecorations()
+        if decos then
+            for i, obj in ipairs(decos) do
+                local r = (obj.type == "tree") and 25 or (obj.size or 15)
+                nvgBeginPath(ctx)
+                nvgCircle(ctx, obj.x, obj.y, r)
+                nvgStrokeColor(ctx, nvgRGBA(100, 180, 255, 80))
+                nvgStrokeWidth(ctx, 1.0 / totalZoom)
+                nvgStroke(ctx)
+            end
+        end
+
+        -- 所有舒适区显示可选框(淡黄)
+        local zones = self:GetComfortZones()
+        if zones then
+            for i, z in ipairs(zones) do
+                nvgBeginPath(ctx)
+                nvgCircle(ctx, z.x, z.y, 50)
+                nvgStrokeColor(ctx, nvgRGBA(255, 200, 80, 80))
+                nvgStrokeWidth(ctx, 1.0 / totalZoom)
+                nvgStroke(ctx)
+            end
+        end
+
+        -- 选中对象: 强高亮(亮黄色粗框 + 十字移动图标)
+        if self.editSelected then
+            local ox, oy, hr
+            if self.editSelected.type == "object" then
+                local obj = decos and decos[self.editSelected.idx]
+                if obj then
+                    ox, oy = obj.x, obj.y
+                    hr = (obj.type == "tree") and 30 or (obj.size or 15) + 5
+                end
+            elseif self.editSelected.type == "comfort" then
+                local z = zones and zones[self.editSelected.idx]
+                if z then
+                    ox, oy = z.x, z.y
+                    hr = 60
+                end
+            end
+
+            if ox and oy then
+                -- 选中框(亮黄色)
+                nvgBeginPath(ctx)
+                nvgCircle(ctx, ox, oy, hr)
+                nvgStrokeColor(ctx, nvgRGBA(255, 255, 0, 255))
+                nvgStrokeWidth(ctx, 2.5 / totalZoom)
+                nvgStroke(ctx)
+
+                -- 十字移动指示器
+                local crossSize = 12 / totalZoom
+                nvgBeginPath(ctx)
+                nvgMoveTo(ctx, ox - crossSize, oy)
+                nvgLineTo(ctx, ox + crossSize, oy)
+                nvgMoveTo(ctx, ox, oy - crossSize)
+                nvgLineTo(ctx, ox, oy + crossSize)
+                nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 200))
+                nvgStrokeWidth(ctx, 1.5 / totalZoom)
+                nvgStroke(ctx)
+            end
+        end
     end
 
     nvgRestore(ctx)
@@ -1592,10 +1908,10 @@ function LevelEditor:RenderInfoBar(logW, logH, dpr)
     local ctx = self.vg
     local barH = 28
 
-    -- 顶部半透明提示条
+    -- 顶部提示条(与IDE面板统一配色)
     nvgBeginPath(ctx)
     nvgRect(ctx, 0, 0, logW, barH)
-    nvgFillColor(ctx, nvgRGBA(15, 15, 25, 200))
+    nvgFillColor(ctx, nvgRGBA(50, 50, 51, 255))
     nvgFill(ctx)
 
     nvgFontFace(ctx, "sans")
@@ -1666,65 +1982,130 @@ end
 function LevelEditor:RenderBottomToolbar(logW, logH, dpr)
     local ctx = self.vg
     local barY = logH - TOOLBAR_H
+    self._lastLogH = logH  -- 缓存供滚轮判断使用
 
-    -- 半透明背景
+    -- 背景(与IDE面板统一配色)
     nvgBeginPath(ctx)
     nvgRect(ctx, 0, barY, logW, TOOLBAR_H)
-    nvgFillColor(ctx, nvgRGBA(15, 15, 25, 220))
+    nvgFillColor(ctx, nvgRGBA(37, 37, 38, 255))
     nvgFill(ctx)
 
     -- 上边缘线
     nvgBeginPath(ctx)
     nvgMoveTo(ctx, 0, barY)
     nvgLineTo(ctx, logW, barY)
-    nvgStrokeColor(ctx, nvgRGBA(60, 130, 255, 150))
+    nvgStrokeColor(ctx, nvgRGBA(68, 68, 68, 255))
     nvgStrokeWidth(ctx, 1)
     nvgStroke(ctx)
 
     nvgFontFace(ctx, "sans")
 
-    if self.mode == MODE_TERRAIN then
-        self:RenderTerrainToolbar(ctx, logW, logH, barY)
-    elseif self.mode == MODE_OBJECT then
-        self:RenderObjectToolbar(ctx, logW, logH, barY)
-    elseif self.mode == MODE_ZONE then
-        self:RenderZoneToolbar(ctx, logW, logH, barY)
-    end
+    -- 左侧模式切换Tab栏（竖排，80px宽）
+    local tabAreaW = 80
+    local tabH = 32
+    local tabPad = 6
 
-    -- 底部模式切换Tab栏（左下角，36px高）
-    local modeBarY = logH - 36
-    -- Tab栏分隔线
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, 0, modeBarY)
-    nvgLineTo(ctx, logW, modeBarY)
-    nvgStrokeColor(ctx, nvgRGBA(60, 100, 200, 100))
-    nvgStrokeWidth(ctx, 1)
-    nvgStroke(ctx)
+    -- ===== 绘制/编辑 模式按钮(顶部水平排列) =====
+    local modeBtnH = 26
+    local modeBtnW = 34
+    local modeBtnY = barY + 8
+    local modeBtnGap = 4
+    local modeBtnStartX = 6
+    for i = 1, 2 do
+        local bx = modeBtnStartX + (i - 1) * (modeBtnW + modeBtnGap)
+        local isActive = (self.editorMode == i)
 
-    local tabW = 64
-    local tabStartX = 8  -- 左对齐
-    for i = 1, 3 do
-        local bx = tabStartX + (i - 1) * tabW + 2
-        local bw = tabW - 4
-        local by = modeBarY + 4
-        local bh = 28
-        local isActive = (self.mode == i)
-
-        -- Tab背景
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, bx, by, bw, bh, 4)
+        nvgRoundedRect(ctx, bx, modeBtnY, modeBtnW, modeBtnH, 4)
         if isActive then
-            nvgFillColor(ctx, nvgRGBA(60, 130, 255, 200))
+            if i == 1 then
+                nvgFillColor(ctx, nvgRGBA(40, 140, 60, 255))   -- 绘制=绿色
+            else
+                nvgFillColor(ctx, nvgRGBA(180, 100, 30, 255))  -- 编辑=橙色
+            end
         else
-            nvgFillColor(ctx, nvgRGBA(40, 40, 60, 150))
+            nvgFillColor(ctx, nvgRGBA(55, 55, 58, 200))
         end
         nvgFill(ctx)
 
-        -- Tab文字
-        nvgFontSize(ctx, 12)
+        -- 按钮边框
+        if isActive then
+            nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 100))
+            nvgStrokeWidth(ctx, 1)
+            nvgStroke(ctx)
+        end
+
+        nvgFontSize(ctx, 11)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, isActive and 255 or 160))
-        nvgText(ctx, bx + bw / 2, by + bh / 2, MODE_NAMES[i])
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, isActive and 255 or 140))
+        nvgText(ctx, bx + modeBtnW / 2, modeBtnY + modeBtnH / 2, EDITOR_MODE_NAMES[i])
+    end
+
+    -- ===== 地形/物件/区域 子Tab (仅绘制模式) =====
+    local tabStartY = barY + 8 + modeBtnH + 8
+    if self.editorMode == EDITOR_MODE_DRAW then
+        for i = 1, 3 do
+            local bx = 8
+            local by = tabStartY + (i - 1) * (tabH + tabPad)
+            local bw = tabAreaW - 16
+            local bh = tabH
+            local isActive = (self.mode == i)
+
+            -- Tab背景
+            nvgBeginPath(ctx)
+            nvgRoundedRect(ctx, bx, by, bw, bh, 4)
+            if isActive then
+                nvgFillColor(ctx, nvgRGBA(14, 99, 156, 255))
+            else
+                nvgFillColor(ctx, nvgRGBA(60, 60, 65, 200))
+            end
+            nvgFill(ctx)
+
+            -- Tab文字
+            nvgFontSize(ctx, 12)
+            nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+            nvgFillColor(ctx, nvgRGBA(255, 255, 255, isActive and 255 or 160))
+            nvgText(ctx, bx + bw / 2, by + bh / 2, MODE_NAMES[i])
+        end
+    else
+        -- 编辑模式: 显示提示信息
+        nvgFontSize(ctx, 10)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
+        nvgFillColor(ctx, nvgRGBA(200, 200, 200, 180))
+        nvgText(ctx, tabAreaW / 2, tabStartY, "点击选择")
+        nvgText(ctx, tabAreaW / 2, tabStartY + 14, "拖拽移动")
+        nvgText(ctx, tabAreaW / 2, tabStartY + 28, "R 旋转")
+        nvgText(ctx, tabAreaW / 2, tabStartY + 42, "+/- 缩放")
+        nvgText(ctx, tabAreaW / 2, tabStartY + 56, "Del 删除")
+        nvgText(ctx, tabAreaW / 2, tabStartY + 70, "右键删除")
+    end
+
+    -- 左侧分隔线
+    nvgBeginPath(ctx)
+    nvgMoveTo(ctx, tabAreaW, barY + 4)
+    nvgLineTo(ctx, tabAreaW, logH - 4)
+    nvgStrokeColor(ctx, nvgRGBA(68, 68, 68, 255))
+    nvgStrokeWidth(ctx, 1)
+    nvgStroke(ctx)
+
+    -- 右侧内容区域(缩略图网格)
+    local contentX = tabAreaW + 8
+    local contentY = barY + 8
+    local contentW = logW - contentX - 8
+    local contentH = TOOLBAR_H - 16
+
+    if self.editorMode == EDITOR_MODE_DRAW then
+        -- 绘制模式: 显示贴图/物件/区域调色板
+        if self.mode == MODE_TERRAIN then
+            self:RenderTerrainToolbar(ctx, contentX, contentY, contentW, contentH)
+        elseif self.mode == MODE_OBJECT then
+            self:RenderObjectToolbar(ctx, contentX, contentY, contentW, contentH)
+        elseif self.mode == MODE_ZONE then
+            self:RenderZoneToolbar(ctx, contentX, contentY, contentW, contentH)
+        end
+    else
+        -- 编辑模式: 显示选中对象信息
+        self:RenderEditModePanel(ctx, contentX, contentY, contentW, contentH)
     end
 
     -- 坐标显示（右下角）
@@ -1734,30 +2115,41 @@ function LevelEditor:RenderBottomToolbar(logW, logH, dpr)
     nvgFontSize(ctx, 10)
     nvgTextAlign(ctx, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
     nvgFillColor(ctx, nvgRGBA(130, 130, 255, 200))
-    nvgText(ctx, logW - 8, modeBarY + 18, string.format("(%d, %d)", math.floor(wx), math.floor(wy)))
+    nvgText(ctx, logW - 8, logH - 14, string.format("(%d, %d)", math.floor(wx), math.floor(wy)))
 end
 
--- 地形工具栏: 地形贴图缩略图（8列多行布局）
-function LevelEditor:RenderTerrainToolbar(ctx, logW, logH, barY)
+-- 地形工具栏: 左对齐大图标网格 + 滚动
+function LevelEditor:RenderTerrainToolbar(ctx, contentX, contentY, contentW, contentH)
     local count = TERRAIN_BRUSH_COUNT
-    local cols = 8
+    local cellSize = 56
+    local padX = 6
+    local padY = 4
+    local labelH = 14
+    local cols = math.max(1, math.floor((contentW + padX) / (cellSize + padX)))
     local rows = math.ceil(count / cols)
-    local cellSize = 36
-    local padX = 4
-    local padY = 3
-    local labelH = 11
-    local totalW = cols * cellSize + (cols - 1) * padX
-    local totalH = rows * (cellSize + labelH) + (rows - 1) * padY
-    local startX = (logW - totalW) / 2
-    -- 将贴图区域在工具栏内居中（排除底部36px模式栏）
-    local availH = TOOLBAR_H - 36
-    local startY = barY + (availH - totalH) / 2
+    local totalH = rows * (cellSize + labelH + padY)
+
+    -- 限制滚动范围
+    local maxScroll = math.max(0, totalH - contentH)
+    if self.paletteScrollY > maxScroll then self.paletteScrollY = maxScroll end
+
+    -- 裁剪区域
+    nvgSave(ctx)
+    nvgScissor(ctx, contentX, contentY, contentW, contentH)
+
+    local startX = contentX
+    local startY = contentY - self.paletteScrollY
 
     for i = 1, count do
         local col = ((i - 1) % cols)
         local row = math.floor((i - 1) / cols)
         local cx = startX + col * (cellSize + padX)
         local cellY = startY + row * (cellSize + labelH + padY)
+
+        -- 跳过不可见行
+        if cellY + cellSize + labelH < contentY then goto continue end
+        if cellY > contentY + contentH then goto continue end
+
         local isSelected = (self.currentBrush == i)
 
         -- 选中边框
@@ -1771,13 +2163,12 @@ function LevelEditor:RenderTerrainToolbar(ctx, logW, logH, barY)
 
         -- 贴图缩略图
         if self.terrainIcons[i] then
-            local pat = nvgImagePattern(ctx, cx, cellY, cellSize, cellSize, 0, self.terrainIcons[i], isSelected and 1.0 or 0.7)
+            local pat = nvgImagePattern(ctx, cx, cellY, cellSize, cellSize, 0, self.terrainIcons[i], isSelected and 1.0 or 0.75)
             nvgBeginPath(ctx)
             nvgRoundedRect(ctx, cx, cellY, cellSize, cellSize, 3)
             nvgFillPaint(ctx, pat)
             nvgFill(ctx)
         else
-            -- 无贴图时用色块
             nvgBeginPath(ctx)
             nvgRoundedRect(ctx, cx, cellY, cellSize, cellSize, 3)
             nvgFillColor(ctx, nvgRGBA(40 + i * 6, 50, 30, 200))
@@ -1792,33 +2183,60 @@ function LevelEditor:RenderTerrainToolbar(ctx, logW, logH, barY)
         nvgStroke(ctx)
 
         -- 名称标签
-        nvgFontSize(ctx, 7)
+        nvgFontSize(ctx, 9)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
         nvgFillColor(ctx, nvgRGBA(255, 255, 255, isSelected and 255 or 150))
-        nvgText(ctx, cx + cellSize / 2, cellY + cellSize + 1, EDITOR_BRUSH_NAMES[i])
+        nvgText(ctx, cx + cellSize / 2, cellY + cellSize + 2, EDITOR_BRUSH_NAMES[i])
+
+        ::continue::
+    end
+
+    nvgRestore(ctx)
+
+    -- 滚动条（内容超出时显示）
+    if maxScroll > 0 then
+        local scrollBarX = contentX + contentW - 6
+        local scrollBarH = contentH * (contentH / totalH)
+        local scrollBarY = contentY + (self.paletteScrollY / maxScroll) * (contentH - scrollBarH)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, scrollBarX, scrollBarY, 4, scrollBarH, 2)
+        nvgFillColor(ctx, nvgRGBA(150, 150, 150, 120))
+        nvgFill(ctx)
     end
 end
 
--- 物件工具栏: 以缩略图网格显示所有可放置资产
-function LevelEditor:RenderObjectToolbar(ctx, logW, logH, barY)
-    local cols = 7
+-- 物件工具栏: 左对齐大图标网格 + 滚动
+function LevelEditor:RenderObjectToolbar(ctx, contentX, contentY, contentW, contentH)
     local count = OBJ_ASSET_COUNT
-    local rows = math.ceil(count / cols)
-    local cellSize = 48
+    local cellSize = 56
     local padX = 6
     local padY = 4
-    local labelH = 12
-    local totalW = cols * cellSize + (cols - 1) * padX
-    local totalH = rows * (cellSize + labelH) + (rows - 1) * padY
-    local startX = (logW - totalW) / 2
-    local availH = TOOLBAR_H - 36
-    local startY = barY + (availH - totalH) / 2
+    local labelH = 14
+    local cols = math.max(1, math.floor((contentW + padX) / (cellSize + padX)))
+    local rows = math.ceil(count / cols)
+    local totalH = rows * (cellSize + labelH + padY)
+
+    -- 限制滚动范围
+    local maxScroll = math.max(0, totalH - contentH)
+    if self.paletteScrollY > maxScroll then self.paletteScrollY = maxScroll end
+
+    -- 裁剪区域
+    nvgSave(ctx)
+    nvgScissor(ctx, contentX, contentY, contentW, contentH)
+
+    local startX = contentX
+    local startY = contentY - self.paletteScrollY
 
     for i = 1, count do
         local col = ((i - 1) % cols)
         local row = math.floor((i - 1) / cols)
         local cx = startX + col * (cellSize + padX)
         local cellY = startY + row * (cellSize + labelH + padY)
+
+        -- 跳过不可见行
+        if cellY + cellSize + labelH < contentY then goto continue end
+        if cellY > contentY + contentH then goto continue end
+
         local isSelected = (self.objAssetIdx == i)
 
         -- 选中边框
@@ -1853,32 +2271,34 @@ function LevelEditor:RenderObjectToolbar(ctx, logW, logH, barY)
         nvgStroke(ctx)
 
         -- 名称标签
-        nvgFontSize(ctx, 8)
+        nvgFontSize(ctx, 9)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
         nvgFillColor(ctx, nvgRGBA(255, 255, 255, isSelected and 255 or 150))
-        nvgText(ctx, cx + cellSize / 2, cellY + cellSize + 1, OBJ_ASSETS[i].name)
+        nvgText(ctx, cx + cellSize / 2, cellY + cellSize + 2, OBJ_ASSETS[i].name)
+
+        ::continue::
     end
 
-    -- 右侧数量提示
-    local decos = self:GetMapDecorations()
-    local objCount = 0
-    if decos then
-        for _, d in ipairs(decos) do
-            if d.type == "tree" or d.type == "rock" or d.type == "flower" or d.type == "plant" then
-                objCount = objCount + 1
-            end
-        end
+    nvgRestore(ctx)
+
+    -- 滚动条（内容超出时显示）
+    if maxScroll > 0 then
+        local scrollBarX = contentX + contentW - 6
+        local scrollBarH = contentH * (contentH / totalH)
+        local scrollBarY = contentY + (self.paletteScrollY / maxScroll) * (contentH - scrollBarH)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, scrollBarX, scrollBarY, 4, scrollBarH, 2)
+        nvgFillColor(ctx, nvgRGBA(150, 150, 150, 120))
+        nvgFill(ctx)
     end
-    nvgFontSize(ctx, 10)
-    nvgTextAlign(ctx, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(ctx, nvgRGBA(170, 170, 170, 200))
-    nvgText(ctx, logW - 12, barY + availH / 2, "物件总数: " .. objCount)
 end
 
 -- 区域工具栏: 舒适区类型/毒圈/出生点
-function LevelEditor:RenderZoneToolbar(ctx, logW, logH, barY)
-    local cellSize = 52
-    local padding = 10
+function LevelEditor:RenderZoneToolbar(ctx, contentX, contentY, contentW, contentH)
+    local cellSize = 56
+    local padX = 6
+    local padY = 4
+    local labelH = 14
     local items = {
         { name = "篝火", type = "comfort", sub = 1, r = 255, g = 120, b = 30 },
         { name = "清泉", type = "comfort", sub = 2, r = 80, g = 180, b = 255 },
@@ -1886,13 +2306,29 @@ function LevelEditor:RenderZoneToolbar(ctx, logW, logH, barY)
         { name = "毒圈", type = "circle", sub = 0, r = 255, g = 50, b = 50 },
         { name = "出生点", type = "spawn", sub = 0, r = 50, g = 150, b = 255 },
     }
-    local availH = TOOLBAR_H - 36  -- 排除底部模式栏
-    local totalW = #items * cellSize + (#items - 1) * padding
-    local startX = (logW - totalW) / 2
-    local cellY = barY + (availH - cellSize) / 2
+    local count = #items
+    local cols = math.max(1, math.floor((contentW + padX) / (cellSize + padX)))
+    local rows = math.ceil(count / cols)
+    local totalH = rows * (cellSize + labelH + padY)
+
+    -- 滚动限制
+    local maxScroll = math.max(0, totalH - contentH)
+    if self.paletteScrollY > maxScroll then self.paletteScrollY = maxScroll end
+
+    nvgSave(ctx)
+    nvgScissor(ctx, contentX, contentY, contentW, contentH)
 
     for idx, item in ipairs(items) do
-        local cx = startX + (idx - 1) * (cellSize + padding)
+        local col = (idx - 1) % cols
+        local row = math.floor((idx - 1) / cols)
+        local cx = contentX + col * (cellSize + padX)
+        local cy = contentY + row * (cellSize + labelH + padY) - self.paletteScrollY
+
+        -- 跳过不可见
+        if cy + cellSize + labelH < contentY or cy > contentY + contentH then
+            goto continue_zone
+        end
+
         local isSelected = false
         if item.type == "comfort" then
             isSelected = (self.zoneType == ZONE_COMFORT and self.comfortType == item.sub)
@@ -1902,54 +2338,135 @@ function LevelEditor:RenderZoneToolbar(ctx, logW, logH, barY)
             isSelected = (self.zoneType == ZONE_SPAWN)
         end
 
+        -- 选中框
         if isSelected then
             nvgBeginPath(ctx)
-            nvgRoundedRect(ctx, cx - 3, cellY - 3, cellSize + 6, cellSize + 6, 6)
-            nvgStrokeColor(ctx, nvgRGBA(60, 200, 255, 255))
+            nvgRoundedRect(ctx, cx - 3, cy - 3, cellSize + 6, cellSize + 6, 6)
+            nvgStrokeColor(ctx, nvgRGBA(14, 99, 156, 255))
             nvgStrokeWidth(ctx, 2)
             nvgStroke(ctx)
         end
 
         -- 色块背景
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, cx, cellY, cellSize, cellSize, 4)
-        nvgFillColor(ctx, nvgRGBA(20, 20, 30, 220))
+        nvgRoundedRect(ctx, cx, cy, cellSize, cellSize, 4)
+        nvgFillColor(ctx, nvgRGBA(50, 50, 51, 255))
         nvgFill(ctx)
 
         -- 图标(圆形)
         nvgBeginPath(ctx)
-        nvgCircle(ctx, cx + cellSize/2, cellY + cellSize * 0.42, cellSize * 0.25)
-        nvgFillColor(ctx, nvgRGBA(item.r, item.g, item.b, 200))
+        nvgCircle(ctx, cx + cellSize / 2, cy + cellSize * 0.42, cellSize * 0.25)
+        nvgFillColor(ctx, nvgRGBA(item.r, item.g, item.b, 220))
         nvgFill(ctx)
 
         -- 边框
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, cx, cellY, cellSize, cellSize, 4)
-        nvgStrokeColor(ctx, nvgRGBA(80, 80, 100, isSelected and 200 or 80))
+        nvgRoundedRect(ctx, cx, cy, cellSize, cellSize, 4)
+        nvgStrokeColor(ctx, nvgRGBA(68, 68, 68, isSelected and 200 or 100))
         nvgStrokeWidth(ctx, 1)
         nvgStroke(ctx)
 
         -- 名称
-        nvgFontSize(ctx, 9)
+        nvgFontSize(ctx, 10)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, isSelected and 255 or 150))
-        nvgText(ctx, cx + cellSize / 2, cellY + cellSize + 2, item.name)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, isSelected and 255 or 160))
+        nvgText(ctx, cx + cellSize / 2, cy + cellSize + 2, item.name)
+
+        ::continue_zone::
     end
 
-    -- 当前信息
-    nvgFontSize(ctx, 10)
-    nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(ctx, nvgRGBA(170, 170, 170, 200))
-    local infoX = startX + totalW + 16
-    local infoY = barY + availH / 2
-    if self.zoneType == ZONE_CIRCLE then
-        nvgText(ctx, infoX, infoY, string.format("毒圈半径: %.0f", self.gameCircle.radius))
-    elseif self.zoneType == ZONE_SPAWN then
-        nvgText(ctx, infoX, infoY, string.format("出生半径: %.0f", self.spawnConfig.radius))
-    else
+    nvgRestore(ctx)
+
+    -- 当前信息（显示在内容区右侧）
+    local infoX = contentX + math.min(count, cols) * (cellSize + padX) + 12
+    local infoY = contentY + contentH / 2
+    if infoX < contentX + contentW - 60 then
+        nvgFontSize(ctx, 10)
+        nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(170, 170, 170, 200))
+        if self.zoneType == ZONE_CIRCLE then
+            nvgText(ctx, infoX, infoY, string.format("毒圈半径: %.0f", self.gameCircle.radius))
+        elseif self.zoneType == ZONE_SPAWN then
+            nvgText(ctx, infoX, infoY, string.format("出生半径: %.0f", self.spawnConfig.radius))
+        else
+            local zones = self:GetComfortZones()
+            local zoneCount = zones and #zones or 0
+            nvgText(ctx, infoX, infoY, "舒适区数量: " .. zoneCount)
+        end
+    end
+
+    -- 滚动条
+    if maxScroll > 0 then
+        local scrollBarH = math.max(20, contentH * (contentH / totalH))
+        local scrollBarY = contentY + (self.paletteScrollY / maxScroll) * (contentH - scrollBarH)
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, contentX + contentW - 6, scrollBarY, 4, scrollBarH, 2)
+        nvgFillColor(ctx, nvgRGBA(120, 120, 120, 150))
+        nvgFill(ctx)
+    end
+end
+
+-- ============================================================================
+-- 编辑模式右侧面板 - 显示选中对象信息
+-- ============================================================================
+
+function LevelEditor:RenderEditModePanel(ctx, contentX, contentY, contentW, contentH)
+    nvgFontFace(ctx, "sans")
+
+    if not self.editSelected then
+        -- 无选中对象: 提示
+        nvgFontSize(ctx, 14)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(150, 150, 150, 180))
+        nvgText(ctx, contentX + contentW / 2, contentY + contentH / 2, "点击地图上的物件或区域进行编辑")
+        return
+    end
+
+    -- 有选中对象: 显示属性
+    local infoX = contentX + 12
+    local infoY = contentY + 16
+    local lineH = 20
+
+    nvgFontSize(ctx, 13)
+    nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
+
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        local obj = decos and decos[self.editSelected.idx]
+        if obj then
+            -- 标题
+            nvgFillColor(ctx, nvgRGBA(255, 200, 80, 255))
+            nvgText(ctx, infoX, infoY, "物件 #" .. self.editSelected.idx)
+            infoY = infoY + lineH + 4
+
+            nvgFillColor(ctx, nvgRGBA(200, 200, 200, 220))
+            nvgFontSize(ctx, 11)
+            nvgText(ctx, infoX, infoY, "类型: " .. (obj.type or "unknown"))
+            infoY = infoY + lineH
+            nvgText(ctx, infoX, infoY, string.format("位置: (%.0f, %.0f)", obj.x, obj.y))
+            infoY = infoY + lineH
+            if obj.type == "tree" then
+                nvgText(ctx, infoX, infoY, string.format("高度: %.1f", obj.height or 80))
+            else
+                nvgText(ctx, infoX, infoY, string.format("大小: %.1f", obj.size or 15))
+            end
+            infoY = infoY + lineH
+            nvgText(ctx, infoX, infoY, string.format("旋转: %d°", obj.angle or 0))
+        end
+    elseif self.editSelected.type == "comfort" then
         local zones = self:GetComfortZones()
-        local count = zones and #zones or 0
-        nvgText(ctx, infoX, infoY, "舒适区数量: " .. count)
+        local zone = zones and zones[self.editSelected.idx]
+        if zone then
+            nvgFillColor(ctx, nvgRGBA(255, 200, 80, 255))
+            nvgText(ctx, infoX, infoY, "舒适区 #" .. self.editSelected.idx)
+            infoY = infoY + lineH + 4
+
+            nvgFillColor(ctx, nvgRGBA(200, 200, 200, 220))
+            nvgFontSize(ctx, 11)
+            nvgText(ctx, infoX, infoY, "类型: " .. (zone.type or "unknown"))
+            infoY = infoY + lineH
+            nvgText(ctx, infoX, infoY, string.format("位置: (%.0f, %.0f)", zone.x, zone.y))
+        end
     end
 end
 
