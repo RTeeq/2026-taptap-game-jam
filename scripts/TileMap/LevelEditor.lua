@@ -243,6 +243,8 @@ function LevelEditor.New(vg, config)
     self.exportMessage = ""       -- 导出提示信息
     self.dialogTimer = 0          -- 对话框自动消失计时器
     self._copyFlash = 0           -- 复制按钮闪烁计时
+    self._pasteFlash = 0          -- 粘贴按钮闪烁计时
+    self._importIsJSON = false    -- 导入数据是否为JSON格式
 
     return self
 end
@@ -395,27 +397,34 @@ function LevelEditor:HandleKeyDown(key)
         return true
     end
 
+    -- R键: 程序化生成(地形+物件) - 所有绘制模式下通用
+    if key == KEY_R and self.editorMode == EDITOR_MODE_DRAW then
+        local T = self.tileMap.TERRAIN
+        self.lastGenerateSeed = os.time()
+        self.tileMap:GenerateWithBiomes(self.lastGenerateSeed, {
+            [T.GRASS] = 5, [T.MUD] = 3, [T.SWAMP] = 2,
+        }, {
+            regionCount = 18,
+            transitionWidth = 2.5,
+            jitter = 0.7,
+        })
+        -- 后处理: 安全圈内的沼泽替换为草地（沼泽只保留在毒圈区域）
+        self:RemoveSwampInsideCircle()
+        self.terrainExported = true
+        -- 同时重新生成物件(树木、岩石、花朵、植物)
+        if RegenerateMapDecorations then
+            RegenerateMapDecorations()
+        end
+        -- 自动生成种子代码
+        self.seedCode = self:EncodeSeed(self.lastGenerateSeed, 18, 2.5, 0.7)
+        print("[编辑器] 随机地形+物件已生成, 种子代码: " .. self.seedCode)
+        return true
+    end
+
     -- 地形模式
     if self.mode == MODE_TERRAIN then
         if key == KEY_G then
             self.showGrid = not self.showGrid
-            return true
-        end
-        if key == KEY_R then
-            local T = self.tileMap.TERRAIN
-            self.lastGenerateSeed = os.time()
-            self.tileMap:GenerateWithBiomes(self.lastGenerateSeed, {
-                [T.GRASS] = 5, [T.MUD] = 2, [T.SWAMP] = 2,
-                [T.FOREST] = 2, [T.SAND] = 1, [T.SNOW] = 1,
-            }, {
-                regionCount = 18,
-                transitionWidth = 2.5,
-                jitter = 0.7,
-            })
-            self.terrainExported = true
-            -- 自动生成种子代码
-            self.seedCode = self:EncodeSeed(self.lastGenerateSeed, 18, 2.5, 0.7)
-            print("[编辑器] 随机地形已生成, 种子代码: " .. self.seedCode)
             return true
         end
         if key == KEY_LEFTBRACKET then
@@ -494,16 +503,18 @@ function LevelEditor:HandleMouseDown(button, mx, my)
             end
         end
         if self.showExportDialog then
-            -- 检查复制按钮
+            -- 检查复制按钮(增加4px容差提升触摸体验)
             if self._exportCopyRect then
                 local r = self._exportCopyRect
-                if localMX >= r.x and localMX <= r.x + r.w and localMY >= r.y and localMY <= r.y + r.h then
-                    -- 复制到剪贴板
+                local pad = 4
+                if localMX >= r.x - pad and localMX <= r.x + r.w + pad and localMY >= r.y - pad and localMY <= r.y + r.h + pad then
+                    -- 复制到剪贴板(启用系统剪贴板)
                     if ui then
+                        ui.useSystemClipboard = true
                         ui:SetClipboardText(self.exportMessage)
                     end
                     self._copyFlash = 1.0
-                    print("[编辑器] 已复制种子代码: " .. self.exportMessage)
+                    print("[编辑器] 已复制关卡数据到剪贴板")
                     return true
                 end
             end
@@ -602,14 +613,16 @@ function LevelEditor:HandleImportDialogKey(key)
 
     -- 回车: 确认
     if key == KEY_RETURN or key == KEY_KP_ENTER then
-        if #self.importInput == 13 then
-            local success = self:ImportSeedCode(self.importInput)
-            if success then
-                self.showImportDialog = false
-                self.showExportDialog = true
-                self.exportMessage = self.importInput
-                self.dialogTimer = 5.0
-            end
+        local success = false
+        if self._importIsJSON and #self.importInput > 13 then
+            success = self:ImportFullLevel(self.importInput)
+        elseif #self.importInput == 13 then
+            success = self:ImportSeedCode(self.importInput)
+        end
+        if success then
+            self.showImportDialog = false
+            self.importInput = ""
+            self._importIsJSON = false
         end
         return true
     end
@@ -664,25 +677,39 @@ function LevelEditor:HandleTextInput(text)
 end
 
 function LevelEditor:HandleImportDialogClick(mx, my)
-    -- 数字键盘按钮
-    if self._numpadRects then
-        for _, r in ipairs(self._numpadRects) do
-            if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
-                if #self.importInput < 13 then
-                    self.importInput = self.importInput .. r.key
+    -- 粘贴按钮
+    if self._importPasteRect then
+        local r = self._importPasteRect
+        if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+            if ui then
+                ui.useSystemClipboard = true
+                local text = ui:GetClipboardText()
+                if text and #text > 0 then
+                    -- 保存原始文本（支持JSON和旧13位种子码两种格式）
+                    self.importInput = text
+                    self._pasteFlash = 1.0
+                    -- 判断格式类型
+                    if text:sub(1, 1) == "{" then
+                        self._importIsJSON = true
+                        print("[编辑器] 已粘贴完整关卡数据 (" .. #text .. " 字节)")
+                    else
+                        self._importIsJSON = false
+                        local digits = text:gsub("[^%d]", ""):sub(1, 13)
+                        self.importInput = digits
+                        print("[编辑器] 已粘贴种子码: " .. digits)
+                    end
                 end
-                return true
             end
+            return true
         end
     end
 
-    -- 删除按钮
-    if self._numpadDeleteRect then
-        local r = self._numpadDeleteRect
+    -- 清空按钮
+    if self._importClearRect then
+        local r = self._importClearRect
         if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
-            if #self.importInput > 0 then
-                self.importInput = self.importInput:sub(1, -2)
-            end
+            self.importInput = ""
+            self._importIsJSON = false
             return true
         end
     end
@@ -691,16 +718,21 @@ function LevelEditor:HandleImportDialogClick(mx, my)
     if self._importConfirmRect then
         local r = self._importConfirmRect
         if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
-            if #self.importInput == 13 then
-                local success = self:ImportSeedCode(self.importInput)
-                if success then
-                    self.showImportDialog = false
-                    self.showExportDialog = true
-                    self.exportMessage = self.importInput
-                    self.dialogTimer = 5.0
-                else
-                    print("[编辑器] 种子代码无效!")
-                end
+            local success = false
+            if self._importIsJSON and #self.importInput > 13 then
+                -- JSON格式：完整关卡导入
+                success = self:ImportFullLevel(self.importInput)
+            elseif #self.importInput == 13 then
+                -- 旧格式：13位种子码
+                success = self:ImportSeedCode(self.importInput)
+            end
+            if success then
+                self.showImportDialog = false
+                self.importInput = ""
+                self._importIsJSON = false
+                print("[编辑器] 导入成功!")
+            else
+                print("[编辑器] 导入失败: 数据无效")
             end
             return true
         end
@@ -712,6 +744,7 @@ function LevelEditor:HandleImportDialogClick(mx, my)
         if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
             self.showImportDialog = false
             self.importInput = ""
+            self._importIsJSON = false
             return true
         end
     end
@@ -895,6 +928,10 @@ function LevelEditor:Update(dt, inputRef, dpr)
     -- 复制按钮闪烁计时
     if self._copyFlash and self._copyFlash > 0 then
         self._copyFlash = self._copyFlash - dt
+    end
+    -- 粘贴按钮闪烁计时
+    if self._pasteFlash and self._pasteFlash > 0 then
+        self._pasteFlash = self._pasteFlash - dt
     end
 
     -- 对话框激活时不处理编辑器输入
@@ -1690,12 +1727,16 @@ function LevelEditor:RenderDialogs(logW, logH)
         nvgFontSize(ctx, 13)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(ctx, nvgRGBA(80, 220, 120, 255))
-        nvgText(ctx, dlgX + dlgW / 2, dlgY + 20, "地图种子代码已生成")
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 20, "关卡数据已导出到剪贴板")
 
-        -- 种子代码(大字)
-        nvgFontSize(ctx, 20)
+        -- 显示数据概要（而不是完整JSON）
+        nvgFontSize(ctx, 14)
         nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
-        nvgText(ctx, dlgX + dlgW / 2, dlgY + 48, self.exportMessage)
+        local sizeKB = string.format("%.1f", #self.exportMessage / 1024)
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 44, "数据大小: " .. sizeKB .. " KB")
+        nvgFontSize(ctx, 11)
+        nvgFillColor(ctx, nvgRGBA(180, 180, 180, 200))
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 62, "包含: 地形 + 物件 + 舒适区")
 
         -- 复制按钮
         local copyBtnW = 64
@@ -1740,8 +1781,8 @@ function LevelEditor:RenderDialogs(logW, logH)
 
     -- ===== 导入对话框 =====
     if self.showImportDialog then
-        local dlgW = 300
-        local dlgH = 240
+        local dlgW = 260
+        local dlgH = 150
         local dlgX = (logW - dlgW) / 2
         local dlgY = (logH - dlgH) / 2 - 20
 
@@ -1759,115 +1800,105 @@ function LevelEditor:RenderDialogs(logW, logH)
         nvgFontSize(ctx, 13)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(ctx, nvgRGBA(80, 150, 240, 255))
-        nvgText(ctx, dlgX + dlgW / 2, dlgY + 18, "导入地图种子代码")
+        nvgText(ctx, dlgX + dlgW / 2, dlgY + 18, "导入关卡数据")
 
-        -- 输入框背景
+        -- 输入显示框
         local inputX = dlgX + 20
-        local inputY = dlgY + 34
+        local inputY = dlgY + 38
         local inputW = dlgW - 40
         local inputH = 30
         nvgBeginPath(ctx)
         nvgRoundedRect(ctx, inputX, inputY, inputW, inputH, 4)
         nvgFillColor(ctx, nvgRGBA(10, 12, 20, 255))
         nvgFill(ctx)
-        nvgStrokeColor(ctx, nvgRGBA(100, 160, 255, 180))
+        local hasData = #self.importInput > 0
+        local isReady = hasData and (self._importIsJSON or #self.importInput == 13)
+        local borderColor = isReady and nvgRGBA(80, 220, 120, 200) or nvgRGBA(100, 160, 255, 180)
+        nvgStrokeColor(ctx, borderColor)
         nvgStrokeWidth(ctx, 1.5)
         nvgStroke(ctx)
 
-        -- 输入文本
-        nvgFontSize(ctx, 16)
+        -- 显示粘贴的内容状态
+        nvgFontSize(ctx, 14)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        if #self.importInput > 0 then
-            nvgFillColor(ctx, nvgRGBA(255, 255, 255, 255))
-            nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, self.importInput)
+        if hasData then
+            if self._importIsJSON then
+                -- JSON格式：显示数据概要
+                nvgFillColor(ctx, nvgRGBA(80, 220, 120, 255))
+                local sizeKB = string.format("%.1f", #self.importInput / 1024)
+                nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, "完整关卡 (" .. sizeKB .. " KB)")
+            else
+                -- 旧种子码格式
+                local textColor = (#self.importInput == 13) and nvgRGBA(80, 220, 120, 255) or nvgRGBA(255, 255, 255, 255)
+                nvgFillColor(ctx, textColor)
+                nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, self.importInput)
+            end
         else
             nvgFillColor(ctx, nvgRGBA(100, 100, 120, 150))
-            nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, "输入13位数字代码...")
+            nvgText(ctx, inputX + inputW / 2, inputY + inputH / 2, "点击下方粘贴按钮...")
         end
 
-        -- 闪烁光标
-        local cursorBlink = math.floor(os.clock() * 2) % 2 == 0
-        if cursorBlink and #self.importInput < 13 then
-            local textW = 0
-            if #self.importInput > 0 then
-                nvgFontSize(ctx, 16)
-                local bounds = {}
-                textW = nvgTextBounds(ctx, 0, 0, self.importInput, bounds)
-            end
-            local cursorX = inputX + inputW / 2 + textW / 2 + 2
-            nvgBeginPath(ctx)
-            nvgRect(ctx, cursorX, inputY + 6, 1.5, inputH - 12)
-            nvgFillColor(ctx, nvgRGBA(100, 180, 255, 200))
-            nvgFill(ctx)
-        end
-
-        -- 字符计数
+        -- 状态提示
         nvgFontSize(ctx, 10)
         nvgTextAlign(ctx, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
-        local countColor = (#self.importInput == 13) and nvgRGBA(80, 220, 120, 200) or nvgRGBA(170, 170, 170, 150)
-        nvgFillColor(ctx, countColor)
-        nvgText(ctx, inputX + inputW, inputY + inputH + 10, #self.importInput .. "/13")
-
-        -- ===== 数字键盘 =====
-        local numpadStartY = inputY + inputH + 20
-        local keyW = 38
-        local keyH = 28
-        local keyGapX = 6
-        local keyGapY = 5
-        local numpadW = 5 * keyW + 4 * keyGapX  -- 5列
-        local numpadX = dlgX + (dlgW - numpadW) / 2
-
-        -- 数字键盘布局: [1][2][3][4][5] / [6][7][8][9][0] / [⌫ 删除][确认]
-        local numKeys = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" }
-        self._numpadRects = {}
-
-        for idx, key in ipairs(numKeys) do
-            local row = math.floor((idx - 1) / 5)
-            local col = (idx - 1) % 5
-            local kx = numpadX + col * (keyW + keyGapX)
-            local ky = numpadStartY + row * (keyH + keyGapY)
-
-            -- 按键背景
-            nvgBeginPath(ctx)
-            nvgRoundedRect(ctx, kx, ky, keyW, keyH, 4)
-            nvgFillColor(ctx, nvgRGBA(50, 55, 70, 220))
-            nvgFill(ctx)
-            nvgStrokeColor(ctx, nvgRGBA(100, 120, 160, 120))
-            nvgStrokeWidth(ctx, 1)
-            nvgStroke(ctx)
-
-            -- 按键文字
-            nvgFontSize(ctx, 14)
-            nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-            nvgFillColor(ctx, nvgRGBA(255, 255, 255, 230))
-            nvgText(ctx, kx + keyW / 2, ky + keyH / 2, key)
-
-            self._numpadRects[idx] = { x = kx, y = ky, w = keyW, h = keyH, key = key }
+        if hasData and self._importIsJSON then
+            nvgFillColor(ctx, nvgRGBA(80, 220, 120, 200))
+            nvgText(ctx, inputX + inputW, inputY + inputH + 10, "JSON数据就绪")
+        elseif hasData then
+            local countColor = (#self.importInput == 13) and nvgRGBA(80, 220, 120, 200) or nvgRGBA(170, 170, 170, 150)
+            nvgFillColor(ctx, countColor)
+            nvgText(ctx, inputX + inputW, inputY + inputH + 10, #self.importInput .. "/13")
         end
 
-        -- 第三行: [⌫ 删除] 和 [确认]
-        local row3Y = numpadStartY + 2 * (keyH + keyGapY)
-        local delBtnW = 2 * keyW + keyGapX
-        local delBtnX = numpadX
+        -- ===== 粘贴按钮 =====
+        local pasteBtnX = dlgX + 20
+        local pasteBtnY = inputY + inputH + 22
+        local pasteBtnW = dlgW - 40
+        local pasteBtnH = 34
+
+        -- 粘贴按钮闪烁效果
+        local pasteAlpha = 220
+        if self._pasteFlash and self._pasteFlash > 0 then
+            pasteAlpha = 255
+        end
 
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, delBtnX, row3Y, delBtnW, keyH, 4)
-        nvgFillColor(ctx, nvgRGBA(120, 50, 50, 200))
+        nvgRoundedRect(ctx, pasteBtnX, pasteBtnY, pasteBtnW, pasteBtnH, 6)
+        nvgFillColor(ctx, nvgRGBA(60, 120, 220, pasteAlpha))
+        nvgFill(ctx)
+
+        nvgFontSize(ctx, 14)
+        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 240))
+        local pasteLabel = (self._pasteFlash and self._pasteFlash > 0) and "已粘贴!" or "粘贴关卡数据"
+        nvgText(ctx, pasteBtnX + pasteBtnW / 2, pasteBtnY + pasteBtnH / 2, pasteLabel)
+
+        self._importPasteRect = { x = pasteBtnX, y = pasteBtnY, w = pasteBtnW, h = pasteBtnH }
+
+        -- ===== 底部按钮行: [清空] [确认导入] =====
+        local bottomY = pasteBtnY + pasteBtnH + 10
+        local btnH = 28
+        local btnGap = 10
+        local halfW = (dlgW - 40 - btnGap) / 2
+
+        -- 清空按钮
+        local clearBtnX = dlgX + 20
+        nvgBeginPath(ctx)
+        nvgRoundedRect(ctx, clearBtnX, bottomY, halfW, btnH, 4)
+        nvgFillColor(ctx, nvgRGBA(100, 50, 50, 200))
         nvgFill(ctx)
         nvgFontSize(ctx, 12)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 230))
-        nvgText(ctx, delBtnX + delBtnW / 2, row3Y + keyH / 2, "删除")
+        nvgFillColor(ctx, nvgRGBA(255, 255, 255, 220))
+        nvgText(ctx, clearBtnX + halfW / 2, bottomY + btnH / 2, "清空")
 
-        self._numpadDeleteRect = { x = delBtnX, y = row3Y, w = delBtnW, h = keyH }
+        self._importClearRect = { x = clearBtnX, y = bottomY, w = halfW, h = btnH }
 
-        -- 确认按钮
-        local canConfirm = (#self.importInput == 13)
-        local confirmBtnW = 2 * keyW + keyGapX
-        local confirmBtnX = numpadX + 3 * (keyW + keyGapX)
-
+        -- 确认导入按钮
+        local canConfirm = (self._importIsJSON and #self.importInput > 13) or (#self.importInput == 13)
+        local confirmBtnX = clearBtnX + halfW + btnGap
         nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, confirmBtnX, row3Y, confirmBtnW, keyH, 4)
+        nvgRoundedRect(ctx, confirmBtnX, bottomY, halfW, btnH, 4)
         if canConfirm then
             nvgFillColor(ctx, nvgRGBA(40, 160, 80, 220))
         else
@@ -1877,9 +1908,9 @@ function LevelEditor:RenderDialogs(logW, logH)
         nvgFontSize(ctx, 12)
         nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(ctx, nvgRGBA(255, 255, 255, canConfirm and 240 or 80))
-        nvgText(ctx, confirmBtnX + confirmBtnW / 2, row3Y + keyH / 2, "确认")
+        nvgText(ctx, confirmBtnX + halfW / 2, bottomY + btnH / 2, "确认导入")
 
-        self._importConfirmRect = { x = confirmBtnX, y = row3Y, w = confirmBtnW, h = keyH }
+        self._importConfirmRect = { x = confirmBtnX, y = bottomY, w = halfW, h = btnH }
 
         -- 取消按钮(在标题右侧)
         local cancelBtnW = 40
@@ -2569,19 +2600,72 @@ function LevelEditor:DecodeSeed(code)
     return seed, regionCount, transWidth, jitter
 end
 
---- 导出当前地图为种子代码
+--- 导出完整关卡数据到剪贴板
 function LevelEditor:ExportSeedCode()
-    local seed = self.lastGenerateSeed
-    if seed == 0 then
-        seed = os.time()
+    local json = self:ExportFullLevel()
+    if not json then
+        print("[编辑器] 导出失败")
+        return ""
     end
-    local code = self:EncodeSeed(seed, 18, 2.5, 0.7)
-    self.seedCode = code
+
+    -- 复制到剪贴板
+    if ui then
+        ui.useSystemClipboard = true
+        ui:SetClipboardText(json)
+    end
+
     self.showExportDialog = true
-    self.exportMessage = code
-    self.dialogTimer = 5.0  -- 5秒后自动关闭
-    print("[编辑器] 导出种子代码: " .. code)
-    return code
+    self.exportMessage = json
+    self._copyFlash = 1.0
+    self.dialogTimer = 5.0
+    print("[编辑器] 完整关卡已导出到剪贴板 (大小: " .. #json .. " 字节)")
+    return json
+end
+
+--- 移除安全圈内的沼泽地形（沼泽只允许出现在毒圈区域）
+--- 将安全圈内的 SWAMP 替换为 GRASS
+function LevelEditor:RemoveSwampInsideCircle()
+    local T = self.tileMap.TERRAIN
+    local data = self.tileMap.data
+    if not data then return end
+
+    -- 获取安全圈参数（世界像素坐标）
+    local circleCX, circleCY, circleR
+    if self.gameCircle then
+        circleCX = self.gameCircle.cx
+        circleCY = self.gameCircle.cy
+        circleR = self.gameCircle.radius or self.gameCircle.targetRadius
+    else
+        -- 退回默认: 地图中心，半径=地图一半
+        circleCX = self.mapPixelSize / 2 + self.mapOriginX
+        circleCY = self.mapPixelSize / 2 + self.mapOriginY
+        circleR = self.mapPixelSize / 2
+    end
+
+    local tileSize = self.tilePixel
+    local replaced = 0
+
+    for y, row in pairs(data) do
+        for x, t in pairs(row) do
+            if t == T.SWAMP then
+                -- 瓦片中心的世界像素坐标
+                local worldX = self.mapOriginX + (x - 0.5) * tileSize
+                local worldY = self.mapOriginY + (y - 0.5) * tileSize
+                local dx = worldX - circleCX
+                local dy = worldY - circleCY
+                local dist = math.sqrt(dx * dx + dy * dy)
+                -- 在安全圈内 → 替换为草地
+                if dist < circleR * 0.85 then
+                    data[y][x] = T.GRASS
+                    replaced = replaced + 1
+                end
+            end
+        end
+    end
+
+    if replaced > 0 then
+        print("[编辑器] 安全圈内沼泽已替换为草地: " .. replaced .. " 格")
+    end
 end
 
 --- 从种子代码导入并重新生成地图
@@ -2594,17 +2678,18 @@ function LevelEditor:ImportSeedCode(code)
         return false
     end
 
-    -- 使用解码的参数重新生成地形
+    -- 使用解码的参数重新生成地形（草地+泥地+沼泽，沼泽限制在毒圈内）
     self.lastGenerateSeed = seed
     local T = self.tileMap.TERRAIN
     self.tileMap:GenerateWithBiomes(seed, {
-        [T.GRASS] = 5, [T.MUD] = 2, [T.SWAMP] = 2,
-        [T.FOREST] = 2, [T.SAND] = 1, [T.SNOW] = 1,
+        [T.GRASS] = 5, [T.MUD] = 3, [T.SWAMP] = 2,
     }, {
         regionCount = regionCount,
         transitionWidth = transWidth,
         jitter = jitter,
     })
+    -- 后处理: 安全圈内的沼泽替换为草地
+    self:RemoveSwampInsideCircle()
     self.terrainExported = true
     self.seedCode = code
 
@@ -2614,6 +2699,194 @@ function LevelEditor:ImportSeedCode(code)
     end
 
     print("[编辑器] 导入种子代码: " .. code .. " → seed=" .. seed .. " regions=" .. regionCount)
+    return true
+end
+
+-- ============================================================================
+-- 完整关卡导出/导入（包含地形+物件+舒适区）
+-- ============================================================================
+
+--- 导出完整关卡数据为JSON字符串
+---@return string JSON字符串
+function LevelEditor:ExportFullLevel()
+    local cjson = require("cjson")
+
+    -- 1. 收集地形瓦片数据(只保存非空瓦片，用稀疏格式减少体积)
+    local terrainTiles = {}
+    if self.tileMap and self.tileMap.data then
+        for y, row in pairs(self.tileMap.data) do
+            for x, t in pairs(row) do
+                if t and t > 0 then
+                    table.insert(terrainTiles, {x, y, t})
+                end
+            end
+        end
+    end
+
+    -- 2. 收集物件数据
+    local objects = {}
+    local decos = self:GetMapDecorations()
+    if decos then
+        for _, obj in ipairs(decos) do
+            local o = {
+                type = obj.type,
+                x = math.floor(obj.x * 10) / 10,
+                y = math.floor(obj.y * 10) / 10,
+            }
+            if obj.type == "tree" then
+                o.height = obj.height
+                o.twist = obj.twist
+                o.branches = obj.branches
+                o.seed = obj.seed
+            elseif obj.type == "rock" then
+                o.size = obj.size
+                o.seed = obj.seed
+            elseif obj.type == "flower" then
+                o.variant = obj.variant
+                o.size = obj.size
+                o.seed = obj.seed
+            elseif obj.type == "plant" then
+                o.variant = obj.variant
+                o.size = obj.size
+                o.seed = obj.seed
+            end
+            table.insert(objects, o)
+        end
+    end
+
+    -- 3. 收集舒适区数据
+    local zones = {}
+    local comfortZones = self:GetComfortZones()
+    if comfortZones then
+        for _, zone in ipairs(comfortZones) do
+            table.insert(zones, {
+                type = zone.type,
+                x = math.floor(zone.x * 10) / 10,
+                y = math.floor(zone.y * 10) / 10,
+                radius = zone.radius,
+            })
+        end
+    end
+
+    -- 4. 组装完整数据
+    local levelData = {
+        version = 2,
+        seed = self.lastGenerateSeed,
+        mapWidth = self.tileMap and self.tileMap.mapWidth or 0,
+        mapHeight = self.tileMap and self.tileMap.mapHeight or 0,
+        terrain = terrainTiles,
+        objects = objects,
+        zones = zones,
+    }
+
+    local json = cjson.encode(levelData)
+    return json
+end
+
+--- 从JSON字符串导入完整关卡数据
+---@param json string JSON字符串
+---@return boolean 是否成功
+function LevelEditor:ImportFullLevel(json)
+    if not json or #json < 10 then
+        print("[编辑器] 导入数据为空或太短")
+        return false
+    end
+
+    local cjson = require("cjson")
+    local ok, levelData = pcall(cjson.decode, json)
+    if not ok or not levelData then
+        print("[编辑器] JSON解析失败")
+        return false
+    end
+
+    -- 检查版本
+    if not levelData.version or levelData.version < 2 then
+        print("[编辑器] 数据版本不兼容（需要v2+）")
+        return false
+    end
+
+    -- 1. 还原地形瓦片数据
+    if levelData.terrain and self.tileMap then
+        -- 清空当前地形
+        self.tileMap.data = {}
+        -- 恢复地图尺寸
+        if levelData.mapWidth then self.tileMap.mapWidth = levelData.mapWidth end
+        if levelData.mapHeight then self.tileMap.mapHeight = levelData.mapHeight end
+        -- 填充瓦片
+        for _, tile in ipairs(levelData.terrain) do
+            local x, y, t = tile[1], tile[2], tile[3]
+            if not self.tileMap.data[y] then self.tileMap.data[y] = {} end
+            self.tileMap.data[y][x] = t
+        end
+        self.terrainExported = true
+    end
+
+    -- 2. 还原物件数据
+    if levelData.objects then
+        local decos = self:GetMapDecorations()
+        if decos then
+            -- 清空当前物件
+            for i = #decos, 1, -1 do
+                table.remove(decos, i)
+            end
+            -- 填充物件
+            for _, obj in ipairs(levelData.objects) do
+                local o = {
+                    type = obj.type,
+                    x = obj.x,
+                    y = obj.y,
+                }
+                if obj.type == "tree" then
+                    o.height = obj.height or (60 + math.random() * 80)
+                    o.twist = obj.twist or 0
+                    o.branches = obj.branches or 3
+                    o.seed = obj.seed or math.random(1, 99999)
+                elseif obj.type == "rock" then
+                    o.size = obj.size or 15
+                    o.seed = obj.seed or math.random(1, 99999)
+                elseif obj.type == "flower" then
+                    o.variant = obj.variant or 1
+                    o.size = obj.size or 30
+                    o.seed = obj.seed or math.random(1, 99999)
+                elseif obj.type == "plant" then
+                    o.variant = obj.variant or 1
+                    o.size = obj.size or 35
+                    o.seed = obj.seed or math.random(1, 99999)
+                end
+                table.insert(decos, o)
+            end
+        end
+    end
+
+    -- 3. 还原舒适区数据
+    if levelData.zones then
+        local comfortZones = self:GetComfortZones()
+        if comfortZones then
+            -- 清空当前舒适区
+            for i = #comfortZones, 1, -1 do
+                table.remove(comfortZones, i)
+            end
+            -- 填充舒适区
+            for _, zone in ipairs(levelData.zones) do
+                table.insert(comfortZones, {
+                    type = zone.type or "campfire",
+                    x = zone.x,
+                    y = zone.y,
+                    radius = zone.radius or 100,
+                    playersInside = {},
+                })
+            end
+        end
+    end
+
+    -- 4. 恢复种子
+    if levelData.seed then
+        self.lastGenerateSeed = levelData.seed
+    end
+
+    print("[编辑器] 完整关卡导入成功: 地形=" .. #(levelData.terrain or {}) ..
+          " 物件=" .. #(levelData.objects or {}) ..
+          " 区域=" .. #(levelData.zones or {}))
     return true
 end
 

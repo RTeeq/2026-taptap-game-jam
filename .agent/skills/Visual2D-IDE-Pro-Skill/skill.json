@@ -1,0 +1,19 @@
+{
+  "name": "Visual2D-IDE-Pro",
+  "version": "2.0.0",
+  "description": "TapTap制造 可视化游戏编译器 IDE - 完善版，含属性编辑、资源浏览、控制台、复制粘贴、组件系统、动画编辑器、节点数据流编译",
+  "author": "RTeeq",
+  "entry": "scripts/IDE/IDEMain.lua",
+  "type": "editor_extension",
+  "dependencies": [],
+  "permissions": ["file_read", "file_write", "image_load"],
+  "hooks": {
+    "on_project_open": "IDE_OnProjectOpen",
+    "on_project_save": "IDE_OnProjectSave"
+  },
+  "panels": [
+    { "id": "ide_main", "title": "Visual2D IDE", "icon": "🛠" },
+    { "id": "ide_console", "title": "控制台", "icon": "📟" },
+    { "id": "ide_assets", "title": "资源", "icon": "🎨" }
+  ]
+}

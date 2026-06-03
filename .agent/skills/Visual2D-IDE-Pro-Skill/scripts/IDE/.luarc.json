@@ -1,0 +1,13 @@
+{
+  "runtime": {
+    "version": "LuaJIT",
+    "path": ["scripts/?.lua", "scripts/?/init.lua", "?.lua"]
+  },
+  "diagnostics": {
+    "globals": ["nvgCreateFont", "nvgRGBA", "nvgBeginPath", "nvgRect", "nvgFill", "nvgStroke", "nvgCircle", "nvgMoveTo", "nvgLineTo", "nvgBezierTo", "nvgFillColor", "nvgStrokeColor", "nvgStrokeWidth", "nvgFontFace", "nvgFontSize", "nvgText", "nvgTextAlign", "nvgTextBounds", "nvgSave", "nvgRestore", "nvgTranslate", "nvgScale", "nvgScissor", "nvgResetScissor", "NVG_ALIGN_LEFT", "NVG_ALIGN_CENTER", "NVG_ALIGN_RIGHT", "NVG_ALIGN_TOP", "NVG_ALIGN_MIDDLE", "NVG_ALIGN_BOTTOM", "graphics", "input", "fileSystem", "File", "FILE_READ", "FILE_WRITE", "KEY_", "MOUSEB_", "QUAL_", "dt", "os"],
+    "disable": ["unused-local", "trailing-space"]
+  },
+  "workspace": {
+    "library": ["scripts/IDE", "scripts/TileMap", "scripts/Network"]
+  }
+}

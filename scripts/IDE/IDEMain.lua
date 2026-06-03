@@ -8,6 +8,9 @@ local EventBus = require("IDE.EventBus")
 local UndoManager = require("IDE.UndoManager")
 local SceneManager = require("IDE.SceneManager")
 local NodeEditor = require("IDE.NodeEditor")
+local Console = require("IDE.Console")
+local AssetBrowser = require("IDE.AssetBrowser")
+local ComponentSystem = require("IDE.ComponentSystem")
 local LevelEditor = require("TileMap.LevelEditor")
 
 local M = {}
@@ -77,7 +80,24 @@ local toolbarButtons = {
     { id = "sep2",    label = "",      icon = "" },
     { id = "level",   label = "关卡",  icon = "🗺" },
     { id = "node",    label = "节点",  icon = "🔗" },
+    { id = "sep3",    label = "",      icon = "" },
+    { id = "import",  label = "导入",  icon = "📥" },
+    { id = "export",  label = "导出",  icon = "📤" },
 }
+
+-- 右面板标签页: "properties" | "components" | "console" | "assets"
+local rightPanelTab = "properties"
+local RIGHT_TAB_H = 26  -- 标签头高度
+local rightPanelTabs = {
+    { id = "properties",  label = "属性" },
+    { id = "components",  label = "组件" },
+    { id = "console",     label = "日志" },
+    { id = "assets",      label = "资源" },
+}
+
+-- 控制台覆盖层
+local showConsoleOverlay = false
+local consoleOverlayH = 180
 
 -- 编译输出信息
 local compileMsg = { text = "", timer = 0, success = true }
@@ -118,11 +138,17 @@ function M.Init(nvgCtx, opts)
     SceneManager:init()
     NodeEditor:init()
     UndoManager:init()
+    Console:init()
+    AssetBrowser:init()
     -- 接收外部关卡编辑器实例
     if opts and opts.levelEditor then
         levelEditor = opts.levelEditor
     end
-    print("[IDE] 可视化编译器 IDE 已初始化 (含关卡编辑器)")
+    -- 注册控制台回调
+    Console:SetFPSCallback(function()
+        return string.format("对象: %d | 节点: %d", SceneManager:getObjectCount(), NodeEditor:getNodeCount())
+    end)
+    print("[IDE] 可视化编译器 IDE Pro 已初始化 (含关卡编辑器+控制台+资源+组件)")
 end
 
 --- 设置关卡编辑器实例(可在 Init 后注入)
@@ -313,6 +339,22 @@ local function handleToolbarClick(sx, sy)
                             levelEditor:InitImages()
                             levelEditor.active = true
                         end
+                    end
+                elseif btn.id == "import" then
+                    if levelEditor and levelEditor.active then
+                        levelEditor.showImportDialog = true
+                        levelEditor.showExportDialog = false
+                        levelEditor.importInput = ""
+                        levelEditor.importCursor = 0
+                        compileMsg = { text = "输入13位种子代码", timer = 3, success = true }
+                    else
+                        compileMsg = { text = "请先切换到关卡模式", timer = 3, success = false }
+                    end
+                elseif btn.id == "export" then
+                    if levelEditor and levelEditor.active then
+                        levelEditor:ExportSeedCode()
+                    else
+                        compileMsg = { text = "请先切换到关卡模式", timer = 3, success = false }
                     end
                 end
                 return true
@@ -667,6 +709,50 @@ function M.HandleKeyDown(key)
         return true
     end
 
+    -- 控制台输入模式
+    if showConsoleOverlay and Console:IsVisible() then
+        if key == KEY_RETURN or key == KEY_KP_ENTER then
+            Console:ExecuteCommand(Console._input_text)
+            Console._input_text = ""
+            return true
+        elseif key == KEY_ESCAPE then
+            showConsoleOverlay = false
+            Console._visible = false
+            return true
+        elseif key == KEY_BACKSPACE then
+            Console._input_text = Console._input_text:sub(1, -2)
+            return true
+        elseif key == KEY_UP then
+            local hist = Console:HistoryUp()
+            if hist then Console._input_text = hist end
+            return true
+        elseif key == KEY_DOWN then
+            local hist = Console:HistoryDown()
+            if hist ~= nil then Console._input_text = hist end
+            return true
+        end
+        return true
+    end
+
+    -- F7: 切换控制台覆盖层
+    if key == KEY_F7 then
+        showConsoleOverlay = not showConsoleOverlay
+        Console._visible = showConsoleOverlay
+        return true
+    end
+
+    -- F5: 切换右面板标签
+    if key == KEY_F5 then
+        local tabs = {"properties", "components", "console", "assets"}
+        for i, t in ipairs(tabs) do
+            if rightPanelTab == t then
+                rightPanelTab = tabs[(i % #tabs) + 1]
+                break
+            end
+        end
+        return true
+    end
+
     -- 关卡模式: 委托给 LevelEditor (但Tab切模式由IDE处理)
     if currentMode == "level" and levelEditor and levelEditor.active then
         -- Tab切模式由IDE自己处理
@@ -755,6 +841,12 @@ end
 
 function M.HandleTextInput(text)
     if not active then return false end
+
+    -- 控制台输入模式: 接收文本输入
+    if showConsoleOverlay and Console:IsVisible() then
+        Console._input_text = (Console._input_text or "") .. text
+        return true
+    end
 
     -- 属性编辑模式: 接收文本输入
     if propEdit.active then
@@ -852,7 +944,51 @@ end
 function handleRightPanelClick(sx, sy)
     local x = screenW - RIGHT_PANEL_W
     local w = RIGHT_PANEL_W
-    local ly = TOOLBAR_H + 34
+
+    -- 标签页头点击检测
+    local tabY = TOOLBAR_H
+    if sy >= tabY and sy < tabY + RIGHT_TAB_H then
+        local tabW = w / #rightPanelTabs
+        for i, tab in ipairs(rightPanelTabs) do
+            local tx = x + (i - 1) * tabW
+            if sx >= tx and sx < tx + tabW then
+                rightPanelTab = tab.id
+                return
+            end
+        end
+        return
+    end
+
+    -- 内容区起始位置(标签头后)
+    local ly = TOOLBAR_H + RIGHT_TAB_H + 8
+
+    -- 组件标签页: 点击添加组件
+    if rightPanelTab == "components" then
+        local sel = SceneManager:getSelected()
+        if sel then
+            -- 简化: 点击 "+" 行触发 AddComponent
+            local categories = ComponentSystem:GetTypesByCategory()
+            local ITEM_H = 22
+            local checkY = ly + 22  -- 跳过已挂载标题
+            local existingComps = sel.components or {}
+            checkY = checkY + #existingComps * ITEM_H + 6 + 22 -- 跳过已有+添加标题
+
+            for catName, types in pairs(categories) do
+                checkY = checkY + 18  -- 分类标题
+                for _, typeName in ipairs(types) do
+                    if sy >= checkY and sy < checkY + ITEM_H then
+                        ComponentSystem:AddComponent(sel, typeName)
+                        return
+                    end
+                    checkY = checkY + ITEM_H
+                end
+            end
+        end
+        return
+    end
+
+    -- 属性标签页原逻辑
+    if rightPanelTab ~= "properties" then return end
 
     if currentMode == "level" or currentMode == "scene" then
         local sel = SceneManager:getSelected()
@@ -962,6 +1098,8 @@ function M.Render(logW, logH, deviceDpr)
         renderLeftPanel()
         -- 右侧属性面板
         renderRightPanel()
+        -- 控制台覆盖层
+        renderConsoleOverlay()
         -- 叠加编译消息
         renderCompileMessage()
         return
@@ -978,6 +1116,8 @@ function M.Render(logW, logH, deviceDpr)
     renderLeftPanel()
     renderCanvas()
     renderRightPanel()
+    -- 控制台覆盖层
+    renderConsoleOverlay()
     renderCompileMessage()
 end
 
@@ -1557,8 +1697,43 @@ function renderNode(node, isSelected)
 end
 
 -- ============================================================
--- 右面板渲染(属性编辑器)
+-- 右面板渲染(标签页: 属性/组件/控制台/资源)
 -- ============================================================
+function renderRightPanelTabHeader(x, y, w)
+    -- 标签栏背景
+    nvgBeginPath(vg)
+    nvgRect(vg, x, y, w, RIGHT_TAB_H)
+    nvgFillColor(vg, nvgRGBA(Config.COLORS.panelHeader[1], Config.COLORS.panelHeader[2], Config.COLORS.panelHeader[3], 255))
+    nvgFill(vg)
+
+    -- 绘制每个标签
+    local tabW = w / #rightPanelTabs
+    nvgFontFace(vg, "ide-sans")
+    nvgFontSize(vg, 11)
+    for i, tab in ipairs(rightPanelTabs) do
+        local tx = x + (i - 1) * tabW
+        local isActive = (rightPanelTab == tab.id)
+        local isHovered = mouse.x >= tx and mouse.x < tx + tabW and mouse.y >= y and mouse.y < y + RIGHT_TAB_H
+
+        if isActive then
+            nvgBeginPath(vg)
+            nvgRect(vg, tx, y + RIGHT_TAB_H - 2, tabW, 2)
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 255))
+            nvgFill(vg)
+        end
+
+        if isHovered and not isActive then
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 255))
+        elseif isActive then
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 255))
+        else
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
+        end
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgText(vg, tx + tabW / 2, y + RIGHT_TAB_H / 2, tab.label)
+    end
+end
+
 function renderRightPanel()
     local bottomOffset = (currentMode == "level") and BOTTOM_PALETTE_H or 0
     local x = screenW - RIGHT_PANEL_W
@@ -1572,24 +1747,40 @@ function renderRightPanel()
     nvgFillColor(vg, nvgRGBA(Config.COLORS.panel[1], Config.COLORS.panel[2], Config.COLORS.panel[3], 255))
     nvgFill(vg)
 
-    -- 标题
+    -- 标签页头
+    renderRightPanelTabHeader(x, y, w)
+
+    -- 内容区域起始Y
+    local contentY = y + RIGHT_TAB_H + 4
+    local contentH = h - RIGHT_TAB_H - 4
+
+    -- 根据当前标签渲染对应面板
+    if rightPanelTab == "properties" then
+        renderPropertiesContent(x, contentY, w, contentH)
+    elseif rightPanelTab == "components" then
+        renderComponentsContent(x, contentY, w, contentH)
+    elseif rightPanelTab == "console" then
+        renderConsoleContent(x, contentY, w, contentH)
+    elseif rightPanelTab == "assets" then
+        renderAssetsContent(x, contentY, w, contentH)
+    end
+
+    -- 左边框线
     nvgBeginPath(vg)
-    nvgRect(vg, x, y, w, 24)
-    nvgFillColor(vg, nvgRGBA(Config.COLORS.panelHeader[1], Config.COLORS.panelHeader[2], Config.COLORS.panelHeader[3], 255))
-    nvgFill(vg)
+    nvgMoveTo(vg, x, y)
+    nvgLineTo(vg, x, y + h)
+    nvgStrokeColor(vg, nvgRGBA(Config.COLORS.border[1], Config.COLORS.border[2], Config.COLORS.border[3], 255))
+    nvgStroke(vg)
+end
 
-    nvgFontFace(vg, "ide-sans")
-    nvgFontSize(vg, 12)
-    nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 255))
-    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-    nvgText(vg, x + 8, y + 12, "属性")
-
-    -- 显示选中对象/节点属性
-    local ly = y + 34
+-- ============================================================
+-- 右面板: 属性内容
+-- ============================================================
+function renderPropertiesContent(x, y, w, h)
+    local ly = y + 4
     if currentMode == "level" or currentMode == "scene" then
         local sel = SceneManager:getSelected()
         if sel then
-            -- 属性字段定义
             local fields = {
                 { field = "name",     label = "名称",   editable = true },
                 { field = "type",     label = "类型",   editable = false },
@@ -1605,16 +1796,16 @@ function renderRightPanel()
                 local itemY = ly + (i - 1) * PROP_H
                 local isEditing = propEdit.active and propEdit.field == prop.field and propEdit.targetId == sel.id
                 local isHovered = (propPanel.hoveredField == prop.field)
-
                 renderPropertyField(x, itemY, w, prop.label, sel[prop.field], prop.editable, isEditing, isHovered, prop.field)
             end
         else
+            nvgFontFace(vg, "ide-sans")
             nvgFontSize(vg, 11)
             nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
             nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, x + 8, ly, "未选中对象")
+            nvgText(vg, x + 8, ly + 10, "未选中对象")
             nvgFontSize(vg, 10)
-            nvgText(vg, x + 8, ly + 18, "在画布中点击选择对象")
+            nvgText(vg, x + 8, ly + 28, "在画布中点击选择对象")
         end
     else
         local sel = NodeEditor:getSelectedNode()
@@ -1635,6 +1826,7 @@ function renderRightPanel()
             -- 输入端口
             local portY = ly + #nodeFields * PROP_H + 8
             if sel.inputs and #sel.inputs > 0 then
+                nvgFontFace(vg, "ide-sans")
                 nvgFontSize(vg, 11)
                 nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 200))
                 nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
@@ -1646,19 +1838,293 @@ function renderRightPanel()
                 end
             end
         else
+            nvgFontFace(vg, "ide-sans")
             nvgFontSize(vg, 11)
             nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
             nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, x + 8, ly, "未选中节点")
+            nvgText(vg, x + 8, ly + 10, "未选中节点")
         end
     end
+end
 
-    -- 左边框线
+-- ============================================================
+-- 右面板: 组件内容
+-- ============================================================
+function renderComponentsContent(x, y, w, h)
+    nvgFontFace(vg, "ide-sans")
+    local ly = y + 4
+    local sel = SceneManager:getSelected()
+
+    if not sel then
+        nvgFontSize(vg, 11)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgText(vg, x + 8, ly + 10, "选中对象后查看组件")
+        return
+    end
+
+    -- 组件类型按类别分组
+    local categories = ComponentSystem:GetTypesByCategory()
+    local ITEM_H = 22
+
+    -- 已有组件列表
+    local existingComps = sel.components or {}
+    if #existingComps > 0 then
+        nvgFontSize(vg, 11)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 255))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgText(vg, x + 8, ly + 10, "▸ 已挂载 (" .. #existingComps .. ")")
+        ly = ly + 22
+
+        for _, comp in ipairs(existingComps) do
+            local isHov = mouse.x >= x and mouse.x < x + w and mouse.y >= ly and mouse.y < ly + ITEM_H
+            if isHov then
+                nvgBeginPath(vg)
+                nvgRect(vg, x + 4, ly, w - 8, ITEM_H)
+                nvgFillColor(vg, nvgRGBA(60, 65, 75, 150))
+                nvgFill(vg)
+            end
+            nvgFontSize(vg, 10)
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 220))
+            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+            nvgText(vg, x + 12, ly + ITEM_H / 2, comp.type or "Unknown")
+            ly = ly + ITEM_H
+        end
+        ly = ly + 6
+    end
+
+    -- 可添加组件列表
+    nvgFontSize(vg, 11)
+    nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgText(vg, x + 8, ly + 10, "▸ 添加组件")
+    ly = ly + 22
+
+    for catName, types in pairs(categories) do
+        -- 分类标题
+        nvgFontSize(vg, 9)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 180))
+        nvgText(vg, x + 10, ly + ITEM_H / 2, string.upper(catName))
+        ly = ly + 18
+        for _, typeName in ipairs(types) do
+            if ly + ITEM_H > y + h then break end
+            local isHov = mouse.x >= x and mouse.x < x + w and mouse.y >= ly and mouse.y < ly + ITEM_H
+            if isHov then
+                nvgBeginPath(vg)
+                nvgRect(vg, x + 4, ly, w - 8, ITEM_H)
+                nvgFillColor(vg, nvgRGBA(50, 55, 65, 150))
+                nvgFill(vg)
+            end
+            nvgFontSize(vg, 10)
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 180))
+            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+            nvgText(vg, x + 16, ly + ITEM_H / 2, "+ " .. typeName)
+            ly = ly + ITEM_H
+        end
+    end
+end
+
+-- ============================================================
+-- 右面板: 控制台/日志内容
+-- ============================================================
+function renderConsoleContent(x, y, w, h)
+    nvgFontFace(vg, "ide-sans")
+    local logs = Console:GetFilteredLogs()
+    local LOG_LINE_H = 16
+    local maxLines = math.floor((h - 10) / LOG_LINE_H)
+    local startIdx = math.max(1, #logs - maxLines + 1)
+
+    -- 日志列表
+    local ly = y + 4
+    for i = startIdx, #logs do
+        if ly + LOG_LINE_H > y + h then break end
+        local entry = logs[i]
+        local levelColor = Console.LEVELS[entry.level] or {180, 180, 180}
+        nvgFontSize(vg, 9)
+        nvgFillColor(vg, nvgRGBA(levelColor[1], levelColor[2], levelColor[3], 220))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+
+        -- 截断过长文本
+        local text = entry.text or ""
+        if #text > 35 then text = text:sub(1, 35) .. "…" end
+        nvgText(vg, x + 6, ly + LOG_LINE_H / 2, text)
+        ly = ly + LOG_LINE_H
+    end
+
+    if #logs == 0 then
+        nvgFontSize(vg, 11)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgText(vg, x + 8, y + 14, "暂无日志")
+        nvgFontSize(vg, 9)
+        nvgText(vg, x + 8, y + 30, "F7 打开控制台输入")
+    end
+end
+
+-- ============================================================
+-- 右面板: 资源浏览内容
+-- ============================================================
+function renderAssetsContent(x, y, w, h)
+    nvgFontFace(vg, "ide-sans")
+    local assets = AssetBrowser:GetFilteredAssets()
+    local ITEM_H = 24
+    local ly = y + 4
+
+    -- 类别过滤条
+    local cats = AssetBrowser._categories or {"all"}
+    local catW = w / math.max(#cats, 1)
+    nvgFontSize(vg, 9)
+    for ci, cat in ipairs(cats) do
+        local cx = x + (ci - 1) * catW
+        local isActive = (AssetBrowser._currentCategory == cat)
+        if isActive then
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 255))
+        else
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 200))
+        end
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgText(vg, cx + catW / 2, ly + 8, cat)
+    end
+    ly = ly + 20
+
+    -- 资源列表
+    if #assets == 0 then
+        nvgFontSize(vg, 11)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgText(vg, x + 8, ly + 10, "无资源")
+        nvgFontSize(vg, 9)
+        nvgText(vg, x + 8, ly + 26, "将文件放入 assets/ 目录")
+        return
+    end
+
+    for idx, asset in ipairs(assets) do
+        if ly + ITEM_H > y + h then break end
+        local isHov = mouse.x >= x and mouse.x < x + w and mouse.y >= ly and mouse.y < ly + ITEM_H
+        local isSel = (AssetBrowser._selectedAsset == asset.path)
+
+        if isSel then
+            nvgBeginPath(vg)
+            nvgRect(vg, x + 2, ly, w - 4, ITEM_H)
+            nvgFillColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 60))
+            nvgFill(vg)
+        elseif isHov then
+            nvgBeginPath(vg)
+            nvgRect(vg, x + 2, ly, w - 4, ITEM_H)
+            nvgFillColor(vg, nvgRGBA(60, 65, 75, 120))
+            nvgFill(vg)
+        end
+
+        -- 图标
+        nvgFontSize(vg, 12)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 200))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        local icon = "📄"
+        if asset.category == "image" then icon = "🖼"
+        elseif asset.category == "sound" then icon = "🔊"
+        elseif asset.category == "script" then icon = "📜"
+        elseif asset.category == "model" then icon = "📦"
+        end
+        nvgText(vg, x + 6, ly + ITEM_H / 2, icon)
+
+        -- 文件名
+        nvgFontSize(vg, 10)
+        nvgFillColor(vg, nvgRGBA(Config.COLORS.text[1], Config.COLORS.text[2], Config.COLORS.text[3], 220))
+        local name = asset.name or asset.path or "unknown"
+        if #name > 25 then name = name:sub(1, 25) .. "…" end
+        nvgText(vg, x + 24, ly + ITEM_H / 2, name)
+
+        ly = ly + ITEM_H
+    end
+end
+
+-- ============================================================
+-- 控制台覆盖层 (画布底部弹出)
+-- ============================================================
+function renderConsoleOverlay()
+    if not showConsoleOverlay then return end
+
+    local canvasX = LEFT_PANEL_W
+    local canvasW = screenW - LEFT_PANEL_W - RIGHT_PANEL_W
+    local overlayY = screenH - consoleOverlayH
+    local overlayW = canvasW
+    local overlayH = consoleOverlayH
+
+    -- 如果关卡模式有底部调色板, 往上偏移
+    if currentMode == "level" then
+        overlayY = screenH - BOTTOM_PALETTE_H - consoleOverlayH
+    end
+
+    -- 半透明背景
     nvgBeginPath(vg)
-    nvgMoveTo(vg, x, y)
-    nvgLineTo(vg, x, y + h)
-    nvgStrokeColor(vg, nvgRGBA(Config.COLORS.border[1], Config.COLORS.border[2], Config.COLORS.border[3], 255))
+    nvgRect(vg, canvasX, overlayY, overlayW, overlayH)
+    nvgFillColor(vg, nvgRGBA(25, 28, 32, 235))
+    nvgFill(vg)
+
+    -- 顶部边线
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, canvasX, overlayY)
+    nvgLineTo(vg, canvasX + overlayW, overlayY)
+    nvgStrokeColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 180))
+    nvgStrokeWidth(vg, 1)
     nvgStroke(vg)
+
+    -- 标题栏
+    nvgFontFace(vg, "ide-sans")
+    nvgFontSize(vg, 10)
+    nvgFillColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 255))
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgText(vg, canvasX + 8, overlayY + 10, "控制台 (F7关闭 | Enter执行)")
+
+    -- 日志区
+    local logs = Console:GetFilteredLogs()
+    local LOG_LINE_H = 14
+    local logAreaY = overlayY + 22
+    local logAreaH = overlayH - 44
+    local maxLines = math.floor(logAreaH / LOG_LINE_H)
+    local startIdx = math.max(1, #logs - maxLines + 1)
+
+    local ly = logAreaY
+    for i = startIdx, #logs do
+        if ly + LOG_LINE_H > logAreaY + logAreaH then break end
+        local entry = logs[i]
+        local levelColor = Console.LEVELS[entry.level] or {180, 180, 180}
+        nvgFontSize(vg, 9)
+        nvgFillColor(vg, nvgRGBA(levelColor[1], levelColor[2], levelColor[3], 200))
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        local text = entry.text or ""
+        if #text > 80 then text = text:sub(1, 80) .. "…" end
+        nvgText(vg, canvasX + 8, ly + LOG_LINE_H / 2, text)
+        ly = ly + LOG_LINE_H
+    end
+
+    -- 输入框
+    local inputY = overlayY + overlayH - 22
+    nvgBeginPath(vg)
+    nvgRect(vg, canvasX + 4, inputY, overlayW - 8, 18)
+    nvgFillColor(vg, nvgRGBA(35, 38, 45, 255))
+    nvgFill(vg)
+    nvgStrokeColor(vg, nvgRGBA(Config.COLORS.accent[1], Config.COLORS.accent[2], Config.COLORS.accent[3], 150))
+    nvgStrokeWidth(vg, 1)
+    nvgStroke(vg)
+
+    -- 输入文本
+    nvgFontSize(vg, 10)
+    nvgFillColor(vg, nvgRGBA(255, 255, 255, 255))
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    local inputText = Console._input_text or ""
+    nvgText(vg, canvasX + 10, inputY + 9, "> " .. inputText)
+
+    -- 光标闪烁
+    if math.floor(os.clock() * 2) % 2 == 0 then
+        local cursorX = canvasX + 10 + nvgTextBounds(vg, 0, 0, "> " .. inputText)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cursorX + 1, inputY + 3)
+        nvgLineTo(vg, cursorX + 1, inputY + 15)
+        nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 200))
+        nvgStrokeWidth(vg, 1)
+        nvgStroke(vg)
+    end
 end
 
 --- 渲染单行属性字段(label: value 格式, 可编辑/悬停/编辑态)

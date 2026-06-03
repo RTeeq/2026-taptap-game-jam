@@ -7,7 +7,7 @@ local M = {}
 M.GRID_SIZE = 32
 M.SNAP_TO_GRID = true
 M.MAX_LAYERS = 8
-M.VERSION = "1.0.0"
+M.VERSION = "2.0.0"
 M.CANVAS_W = 1280
 M.CANVAS_H = 720
 
@@ -39,6 +39,10 @@ M.NODE_COLORS = {
     math = {155, 89, 182, 255},
     variable = {26, 188, 156, 255},
     input = {52, 73, 94, 255},
+    flow = {41, 128, 185, 255},
+    object = {39, 174, 96, 255},
+    string = {142, 68, 173, 255},
+    comment = {100, 100, 100, 255},
 }
 
 -- 深度拷贝
@@ -74,6 +78,13 @@ end
 -- 点是否在矩形内
 function M.pointInRect(px, py, rx, ry, rw, rh)
     return px >= rx and px <= rx + rw and py >= ry and py <= ry + rh
+end
+
+-- 点是否在圆内
+function M.pointInCircle(px, py, cx, cy, radius)
+    local dx = px - cx
+    local dy = py - cy
+    return dx * dx + dy * dy <= radius * radius
 end
 
 -- 序列化为Lua字符串(简化版)
