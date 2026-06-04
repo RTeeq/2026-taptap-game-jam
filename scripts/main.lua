@@ -447,8 +447,29 @@ local POTION_IMAGE_PATHS = {
     poison = "image/游戏道具/毒药.png",
 }
 
--- 环境装饰素材图片(饥荒风手绘)
--- [已删除] 14种装饰物件的图片路径和句柄数组已移除
+-- 环境装饰素材图片(饥荒风手绘) - 14种物件贴图
+local OBJ_ASSET_PATHS = {
+    -- 树木 (2种)
+    { type = "tree", variant = 1, path = "image/资产绿植/xs1.png" },
+    { type = "tree", variant = 2, path = "image/资产绿植/xs2.png" },
+    -- 岩石 (5种)
+    { type = "rock", variant = 1, path = "image/资产绿植/s2.png" },
+    { type = "rock", variant = 2, path = "image/资产绿植/s3.png" },
+    { type = "rock", variant = 3, path = "image/资产绿植/s4.png" },
+    { type = "rock", variant = 4, path = "image/资产绿植/s5.png" },
+    { type = "rock", variant = 5, path = "image/资产绿植/s6.png" },
+    -- 花朵 (4种)
+    { type = "flower", variant = 1, path = "image/资产绿植/h1.png" },
+    { type = "flower", variant = 2, path = "image/资产绿植/h2.png" },
+    { type = "flower", variant = 3, path = "image/资产绿植/h3.png" },
+    { type = "flower", variant = 4, path = "image/资产绿植/h4.png" },
+    -- 植物 (3种)
+    { type = "plant", variant = 1, path = "image/资产绿植/1.png" },
+    { type = "plant", variant = 2, path = "image/资产绿植/2.png" },
+    { type = "plant", variant = 3, path = "image/资产绿植/3.png" },
+}
+-- 物件贴图句柄表: objAssetImages[type][variant] = nvgImageHandle
+local objAssetImages = {}
 
 -- 关卡编辑器
 local LevelEditor = require("TileMap.LevelEditor")
@@ -2018,6 +2039,7 @@ local function updatePlayers(dt)
 
                 -- 已占领且有剩余能量 → 直接使用(无需等待)
                 if claim.claimed and claim.energyLeft > 0 then
+                    zone.zoneEnergy = zone.zoneEnergy or 100
                     zone.occupiedBy = p.idx
                     p.usingComfortZone = true
                     if p.energy < CONFIG.EnergyMax then
@@ -2687,7 +2709,19 @@ function Start()
         end
     end
 
-    -- [已删除] 14种装饰物件图片加载已移除
+    -- 加载14种装饰物件贴图
+    for _, asset in ipairs(OBJ_ASSET_PATHS) do
+        local img = nvgCreateImage(nvgContext, asset.path, 0)
+        if img == 0 or img == -1 then
+            print("WARNING: Failed to load obj asset: " .. asset.path)
+        else
+            if not objAssetImages[asset.type] then
+                objAssetImages[asset.type] = {}
+            end
+            objAssetImages[asset.type][asset.variant] = img
+            print("Loaded obj asset: " .. asset.type .. " v" .. asset.variant)
+        end
+    end
 
     -- 初始化关卡编辑器
     levelEditor = LevelEditor.New(nvgContext, {
@@ -3881,6 +3915,7 @@ local function syncStateForRender()
     State.cursorImage = cursorImage
     State.potionNvgImages = potionNvgImages
     State.terrainImages = terrainImages
+    State.objAssetImages = objAssetImages
     State.jesterWalkFrames = jesterWalkFrames
     State.jesterIdleFrames = jesterIdleFrames
     State.jesterRunFrames = jesterRunFrames

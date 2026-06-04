@@ -20,29 +20,41 @@ TerrainTileMap.TERRAIN = {
     DEAD_GRASS  = 8,  -- 枯草地
     FOREST      = 9,  -- 森林地面
     COBBLESTONE = 10, -- 鹅卵石路
-    -- 过渡贴图(左右)
+    -- 过渡贴图(左右) LR：左=A 右=B
     GRASS_SAND_LR       = 11,
     GRASS_DEADGRASS_LR  = 12,
     GRASS_ROCKY_LR      = 13,
     GRASS_SWAMP_LR      = 14,
     MUD_ROCKY_LR        = 15,
     MUD_SWAMP_LR        = 16,
-    -- 过渡贴图(上下)
+    -- 过渡贴图(上下) TB：上=A 下=B
     GRASS_SNOW_TB       = 17,
     GRASS_ROCKY_TB      = 18,
     GRASS_MUD_TB        = 19,
     MUD_SWAMP_TB        = 20,
     ROCKY_VOLCANIC_TB   = 21,
-    -- 角落贴图
-    CORNER_GRASS_IN_MUD_BL      = 22,
-    CORNER_GRASS_IN_MUD_BR      = 23,
-    CORNER_GRASS_IN_MUD_TL      = 24,
-    CORNER_GRASS_IN_MUD_TR      = 25,
-    CORNER_GRASS_IN_SWAMP_TL    = 26,
-    CORNER_GRASS_IN_SWAMP_TR    = 27,
-    CORNER_ROCKY_IN_VOLCANIC_TL = 28,
-    CORNER_ROCKY_IN_VOLCANIC_TR = 29,
-    -- 混合/渐变贴图
+    -- 补充方向过渡（正向）
+    GRASS_MUD_LR        = 22,  -- 左草右泥
+    GRASS_SWAMP_TB      = 23,  -- 上草下沼
+    MUD_ROCKY_TB        = 24,  -- 上泥下石
+    ROCKY_VOLCANIC_LR   = 25,  -- 左石右火
+    -- 翻转方向过渡（反向）
+    MUD_GRASS_LR        = 33,  -- 左泥右草
+    MUD_GRASS_TB        = 34,  -- 上泥下草
+    ROCKY_GRASS_LR      = 35,  -- 左石右草
+    ROCKY_GRASS_TB      = 36,  -- 上石下草
+    SWAMP_GRASS_LR      = 37,  -- 左沼右草
+    SWAMP_GRASS_TB      = 38,  -- 上沼下草
+    SAND_GRASS_LR       = 39,  -- 左沙右草
+    SNOW_GRASS_TB       = 40,  -- 上雪下草
+    DEADGRASS_GRASS_LR  = 41,  -- 左枯右草
+    SWAMP_MUD_LR        = 42,  -- 左沼右泥
+    SWAMP_MUD_TB        = 43,  -- 上沼下泥
+    ROCKY_MUD_LR        = 44,  -- 左石右泥
+    ROCKY_MUD_TB        = 45,  -- 上石下泥
+    VOLCANIC_ROCKY_LR   = 46,  -- 左火右石
+    VOLCANIC_ROCKY_TB   = 47,  -- 上火下石
+    -- 渐变贴图（旧素材保留）
     GRASS_TO_MUD        = 30,
     GRASS_TO_SWAMP      = 31,
     ROCKY_TO_VOLCANIC   = 32,
@@ -56,8 +68,11 @@ TerrainTileMap.TERRAIN_NAMES = {
     [15] = "泥石LR", [16] = "泥沼LR",
     [17] = "草雪TB", [18] = "草石TB", [19] = "草泥TB", [20] = "泥沼TB",
     [21] = "石火TB",
-    [22] = "草泥角BL", [23] = "草泥角BR", [24] = "草泥角TL", [25] = "草泥角TR",
-    [26] = "草沼角TL", [27] = "草沼角TR", [28] = "石火角TL", [29] = "石火角TR",
+    [22] = "草泥LR", [23] = "草沼TB", [24] = "泥石TB", [25] = "石火LR",
+    [33] = "泥草LR", [34] = "泥草TB", [35] = "石草LR", [36] = "石草TB",
+    [37] = "沼草LR", [38] = "沼草TB", [39] = "沙草LR", [40] = "雪草TB",
+    [41] = "枯草LR", [42] = "沼泥LR", [43] = "沼泥TB", [44] = "石泥LR",
+    [45] = "石泥TB", [46] = "火石LR", [47] = "火石TB",
     [30] = "草渐泥", [31] = "草渐沼", [32] = "石渐火",
 }
 
@@ -77,104 +92,44 @@ local BASE_TEXTURES = {
     [8]  = "image/地皮/terrain_dead_grass_20260530170619.png",
     [9]  = "image/地皮/terrain_forest_floor_20260530170620.png",
     [10] = "image/地皮/terrain_cobblestone_20260530170621.png",
-    -- 过渡贴图（LR）
-    [11] = "image/地皮/terrain_grass_sand_lr_20260530170624.png",
-    [12] = "image/地皮/terrain_grass_deadgrass_lr_20260530170623.png",
-    [13] = "image/地皮/terrain_grass_rocky_lr_20260530170407.png",
-    [14] = "image/地皮/terrain_grass_swamp_lr_20260530170402.png",
-    [15] = "image/地皮/terrain_mud_rocky_lr_20260530170405.png",
-    [16] = "image/地皮/terrain_mud_swamp_lr_20260530170404.png",
-    -- 过渡贴图（TB）
-    [17] = "image/地皮/terrain_grass_snow_tb_20260530170622.png",
-    [18] = "image/地皮/terrain_grass_rocky_tb_20260530170412.png",
-    [19] = "image/地皮/terrain_grass_mud_tb_20260530170406.png",
-    [20] = "image/地皮/terrain_mud_swamp_tb_20260530170405.png",
-    [21] = "image/地皮/terrain_rocky_volcanic_tb_20260530170414.png",
-    -- 角落贴图
-    [22] = "image/地皮/terrain_corner_grass_in_mud_bl_20260530170523.png",
-    [23] = "image/地皮/terrain_corner_grass_in_mud_br_20260530170508.png",
-    [24] = "image/地皮/terrain_corner_grass_in_mud_tl_20260530170508.png",
-    [25] = "image/地皮/terrain_corner_grass_in_mud_tr_20260530170512.png",
-    [26] = "image/地皮/terrain_corner_grass_in_swamp_tl_20260530170508.png",
-    [27] = "image/地皮/terrain_corner_grass_in_swamp_tr_20260530170508.png",
-    [28] = "image/地皮/terrain_corner_rocky_in_volcanic_tl_20260530170512.png",
-    [29] = "image/地皮/terrain_corner_rocky_in_volcanic_tr_20260530170512.png",
-    -- 渐变/混合贴图
+    -- 过渡贴图（LR 正向）- 左=A 右=B
+    [11] = "image/地皮/terrain_grass_sand_lr_20260604.png",
+    [12] = "image/地皮/terrain_grass_deadgrass_lr_20260604.png",
+    [13] = "image/地皮/terrain_grass_rocky_lr_20260604.png",
+    [14] = "image/地皮/terrain_grass_swamp_lr_20260604.png",
+    [15] = "image/地皮/terrain_mud_rocky_lr_20260604.png",
+    [16] = "image/地皮/terrain_mud_swamp_lr_20260604.png",
+    -- 过渡贴图（TB 正向）- 上=A 下=B
+    [17] = "image/地皮/terrain_grass_snow_tb_20260604.png",
+    [18] = "image/地皮/terrain_grass_rocky_tb_20260604.png",
+    [19] = "image/地皮/terrain_grass_mud_tb_20260604.png",
+    [20] = "image/地皮/terrain_mud_swamp_tb_20260604.png",
+    [21] = "image/地皮/terrain_rocky_volcanic_tb_20260604.png",
+    -- 补充正向过渡
+    [22] = "image/地皮/terrain_grass_mud_lr_20260604.png",
+    [23] = "image/地皮/terrain_grass_swamp_tb_20260604.png",
+    [24] = "image/地皮/terrain_mud_rocky_tb_20260604.png",
+    [25] = "image/地皮/terrain_rocky_volcanic_lr_20260604.png",
+    -- 翻转过渡贴图（反向）- 左=B 右=A / 上=B 下=A
+    [33] = "image/地皮/terrain_mud_grass_lr_20260604.png",
+    [34] = "image/地皮/terrain_mud_grass_tb_20260604.png",
+    [35] = "image/地皮/terrain_rocky_grass_lr_20260604.png",
+    [36] = "image/地皮/terrain_rocky_grass_tb_20260604.png",
+    [37] = "image/地皮/terrain_swamp_grass_lr_20260604.png",
+    [38] = "image/地皮/terrain_swamp_grass_tb_20260604.png",
+    [39] = "image/地皮/terrain_sand_grass_lr_20260604.png",
+    [40] = "image/地皮/terrain_snow_grass_tb_20260604.png",
+    [41] = "image/地皮/terrain_deadgrass_grass_lr_20260604.png",
+    [42] = "image/地皮/terrain_swamp_mud_lr_20260604.png",
+    [43] = "image/地皮/terrain_swamp_mud_tb_20260604.png",
+    [44] = "image/地皮/terrain_rocky_mud_lr_20260604.png",
+    [45] = "image/地皮/terrain_rocky_mud_tb_20260604.png",
+    [46] = "image/地皮/terrain_volcanic_rocky_lr_20260604.png",
+    [47] = "image/地皮/terrain_volcanic_rocky_tb_20260604.png",
+    -- 保留旧渐变贴图作为备用
     [30] = "image/地皮/terrain_grass_to_mud_20260530165951.png",
     [31] = "image/地皮/terrain_grass_to_swamp_20260530165942.png",
     [32] = "image/地皮/terrain_rocky_to_volcanic_20260530165943.png",
-}
-
--- 边缘过渡贴图: [fromTerrain][toTerrain][direction] = path
--- direction: "lr" = 左到右, "tb" = 上到下
-local EDGE_TEXTURES = {}
-
--- 草地过渡
-EDGE_TEXTURES[1] = {
-    [2] = {
-        lr = "image/地皮/terrain_grass_to_mud_20260530165951.png",
-        tb = "image/地皮/terrain_grass_mud_tb_20260530170406.png",
-    },
-    [3] = {
-        lr = "image/地皮/terrain_grass_swamp_lr_20260530170402.png",
-        tb = "image/地皮/terrain_grass_to_swamp_20260530165942.png",
-    },
-    [4] = {
-        lr = "image/地皮/terrain_grass_rocky_lr_20260530170407.png",
-        tb = "image/地皮/terrain_grass_rocky_tb_20260530170412.png",
-    },
-    [6] = {
-        lr = "image/地皮/terrain_grass_sand_lr_20260530170624.png",
-    },
-    [7] = {
-        tb = "image/地皮/terrain_grass_snow_tb_20260530170622.png",
-    },
-    [8] = {
-        lr = "image/地皮/terrain_grass_deadgrass_lr_20260530170623.png",
-    },
-}
-
--- 碎石过渡
-EDGE_TEXTURES[4] = {
-    [5] = {
-        lr = "image/地皮/terrain_rocky_to_volcanic_20260530165943.png",
-        tb = "image/地皮/terrain_rocky_volcanic_tb_20260530170414.png",
-    },
-}
-
--- 泥地过渡
-EDGE_TEXTURES[2] = {
-    [3] = {
-        lr = "image/地皮/terrain_mud_swamp_lr_20260530170404.png",
-        tb = "image/地皮/terrain_mud_swamp_tb_20260530170405.png",
-    },
-    [4] = {
-        lr = "image/地皮/terrain_mud_rocky_lr_20260530170405.png",
-    },
-}
-
--- 角落过渡贴图: [fromTerrain][toTerrain][corner] = path
--- corner: "tl" "tr" "bl" "br" (表示 from 地形所在角落)
-local CORNER_TEXTURES = {}
-
-CORNER_TEXTURES[1] = {
-    [2] = {
-        tl = "image/地皮/terrain_corner_grass_in_mud_tl_20260530170508.png",
-        tr = "image/地皮/terrain_corner_grass_in_mud_tr_20260530170512.png",
-        bl = "image/地皮/terrain_corner_grass_in_mud_bl_20260530170523.png",
-        br = "image/地皮/terrain_corner_grass_in_mud_br_20260530170508.png",
-    },
-    [3] = {
-        tl = "image/地皮/terrain_corner_grass_in_swamp_tl_20260530170508.png",
-        tr = "image/地皮/terrain_corner_grass_in_swamp_tr_20260530170508.png",
-    },
-}
-
-CORNER_TEXTURES[4] = {
-    [5] = {
-        tl = "image/地皮/terrain_corner_rocky_in_volcanic_tl_20260530170512.png",
-        tr = "image/地皮/terrain_corner_rocky_in_volcanic_tr_20260530170512.png",
-    },
 }
 
 -- ============================================================================
@@ -414,9 +369,8 @@ function TerrainTileMap:GenerateWithBiomes(seed, biomes, config)
 
     -- ===== 第1步：生成 Voronoi 种子点 =====
     local seeds = {}
-    local biomeList = {}   -- 按权重展开的地形列表
     local totalWeight = 0
-    for terrain, weight in pairs(biomes) do
+    for _, weight in pairs(biomes) do
         totalWeight = totalWeight + weight
     end
     -- 构建累积分布
@@ -463,15 +417,11 @@ function TerrainTileMap:GenerateWithBiomes(seed, biomes, config)
     end
 
     -- ===== 第2步：Voronoi 分区（每个瓦片归属最近的种子点）=====
-    -- 同时记录到最近种子点的距离和到第二近种子点的距离（用于过渡带判定）
-    local distMap = {}       -- [y][x] = { nearest, secondNearest, nearestTerrain, secondTerrain }
     for y = 1, self.mapHeight do
-        distMap[y] = {}
+        if not self.data[y] then self.data[y] = {} end
         for x = 1, self.mapWidth do
             local minD1 = math.huge
-            local minD2 = math.huge
             local terrain1 = nil
-            local terrain2 = nil
 
             for _, s in ipairs(seeds) do
                 -- 加入扰动使边界不规则
@@ -481,41 +431,59 @@ function TerrainTileMap:GenerateWithBiomes(seed, biomes, config)
                 local d = math.sqrt(dx * dx + dy * dy) + noise
 
                 if d < minD1 then
-                    minD2 = minD1
-                    terrain2 = terrain1
                     minD1 = d
                     terrain1 = s.terrain
-                elseif d < minD2 then
-                    minD2 = d
-                    terrain2 = s.terrain
                 end
             end
 
-            distMap[y][x] = {
-                nearest = minD1,
-                secondNearest = minD2,
-                nearestTerrain = terrain1,
-                secondTerrain = terrain2,
-            }
-            -- 先填充为最近区域的地形
             self.data[y][x] = terrain1
         end
     end
 
-    -- ===== 第3步：边缘平滑（1次轻度平滑消除噪点，只对基础地形）=====
-    local newData = {}
-    for y = 1, self.mapHeight do
-        newData[y] = {}
-        for x = 1, self.mapWidth do
-            newData[y][x] = self:GetDominantNeighbor(x, y)
-        end
-    end
-    self.data = newData
+    -- ===== 第3步：多次边缘平滑（消除碎片和噪点）=====
+    -- 使用 3 次迭代，确保区块边界干净整洁
+    for iteration = 1, 3 do
+        local newData = {}
+        for y = 1, self.mapHeight do
+            newData[y] = {}
+            for x = 1, self.mapWidth do
+                -- 只统计上下左右四个邻居（不含对角线），更干净
+                local counts = {}
+                local current = self.data[y][x]
+                counts[current] = 1  -- 自身算 1 票
 
-    -- ===== 第4步：生成方向性过渡带（LR/TB/Corner）=====
-    -- 基于平滑后的地图数据，检测每个边界瓦片的邻居方向来放置正确的过渡类型
-    local T = TerrainTileMap.TERRAIN
-    local transitionData = {}  -- 临时过渡层，避免修改影响后续检测
+                local neighbors = {
+                    (y > 1) and self.data[y-1][x] or current,
+                    (y < self.mapHeight) and self.data[y+1][x] or current,
+                    (x > 1) and self.data[y][x-1] or current,
+                    (x < self.mapWidth) and self.data[y][x+1] or current,
+                }
+                for _, t in ipairs(neighbors) do
+                    counts[t] = (counts[t] or 0) + 1
+                end
+
+                -- 如果自身地形不占多数（至少3/5），替换为多数地形
+                local maxCount = 0
+                local dominant = current
+                for t, c in pairs(counts) do
+                    if c > maxCount then
+                        maxCount = c
+                        dominant = t
+                    end
+                end
+                newData[y][x] = dominant
+            end
+        end
+        self.data = newData
+    end
+
+    -- ===== 第4步：在边界放置过渡贴图（每条边界只放1个瓦片宽）=====
+    -- 规则简单清晰：
+    --   遍历每个瓦片，检查它的右邻和下邻
+    --   如果不同 → 在当前瓦片位置放一个 LR 或 TB 过渡
+    --   不放角落，不放渐变，保持简洁
+
+    local transitionData = {}
     for y = 1, self.mapHeight do
         transitionData[y] = {}
     end
@@ -523,121 +491,33 @@ function TerrainTileMap:GenerateWithBiomes(seed, biomes, config)
     for y = 1, self.mapHeight do
         for x = 1, self.mapWidth do
             local current = self.data[y][x]
-            -- 只处理基础地形（ID <= 10）
-            if current > 10 then goto continue end
+            if current > 10 then goto continue_trans end
 
-            local left   = (x > 1) and self.data[y][x-1] or current
             local right  = (x < self.mapWidth) and self.data[y][x+1] or current
-            local top    = (y > 1) and self.data[y-1][x] or current
             local bottom = (y < self.mapHeight) and self.data[y+1][x] or current
-            local topLeft  = (x > 1 and y > 1) and self.data[y-1][x-1] or current
-            local topRight = (x < self.mapWidth and y > 1) and self.data[y-1][x+1] or current
-            local botLeft  = (x > 1 and y < self.mapHeight) and self.data[y+1][x-1] or current
-            local botRight = (x < self.mapWidth and y < self.mapHeight) and self.data[y+1][x+1] or current
 
-            -- 只关注基础地形邻居
-            if left > 10 then left = current end
-            if right > 10 then right = current end
-            if top > 10 then top = current end
-            if bottom > 10 then bottom = current end
-            if topLeft > 10 then topLeft = current end
-            if topRight > 10 then topRight = current end
-            if botLeft > 10 then botLeft = current end
-            if botRight > 10 then botRight = current end
+            local hDiff = (right ~= current and right <= 10)
+            local vDiff = (bottom ~= current and bottom <= 10)
 
-            -- 检查是否处于边界
-            local hasHorizontalEdge = (left ~= current) or (right ~= current)
-            local hasVerticalEdge = (top ~= current) or (bottom ~= current)
-
-            -- 确定相邻的"另一种地形"
-            local otherTerrain = nil
-            if left ~= current and left <= 10 then otherTerrain = left
-            elseif right ~= current and right <= 10 then otherTerrain = right
-            elseif top ~= current and top <= 10 then otherTerrain = top
-            elseif bottom ~= current and bottom <= 10 then otherTerrain = bottom
-            end
-
-            if not otherTerrain then goto continue end
-
-            -- 标准化查找方向（确保 from < to）
-            local from, to = current, otherTerrain
-            if from > to then from, to = to, from end
-
-            -- === 角落检测（优先级最高）===
-            -- 角落条件：对角线方向有不同地形，但相邻的两个正交方向是当前地形
-            local cornerPlaced = false
-
-            -- 左上角有 other，但 top 和 left 是 current → 当前瓦片是 BR 角落
-            if topLeft ~= current and topLeft <= 10 and top == current and left == current then
-                local cFrom, cTo = current, topLeft
-                if cFrom > cTo then cFrom, cTo = cTo, cFrom end
-                local cornerType = self:FindCornerTerrain(cFrom, cTo, "br")
-                if cornerType then
-                    transitionData[y][x] = cornerType
-                    cornerPlaced = true
-                end
-            end
-            -- 右上角
-            if not cornerPlaced and topRight ~= current and topRight <= 10 and top == current and right == current then
-                local cFrom, cTo = current, topRight
-                if cFrom > cTo then cFrom, cTo = cTo, cFrom end
-                local cornerType = self:FindCornerTerrain(cFrom, cTo, "bl")
-                if cornerType then
-                    transitionData[y][x] = cornerType
-                    cornerPlaced = true
-                end
-            end
-            -- 左下角
-            if not cornerPlaced and botLeft ~= current and botLeft <= 10 and bottom == current and left == current then
-                local cFrom, cTo = current, botLeft
-                if cFrom > cTo then cFrom, cTo = cTo, cFrom end
-                local cornerType = self:FindCornerTerrain(cFrom, cTo, "tr")
-                if cornerType then
-                    transitionData[y][x] = cornerType
-                    cornerPlaced = true
-                end
-            end
-            -- 右下角
-            if not cornerPlaced and botRight ~= current and botRight <= 10 and bottom == current and right == current then
-                local cFrom, cTo = current, botRight
-                if cFrom > cTo then cFrom, cTo = cTo, cFrom end
-                local cornerType = self:FindCornerTerrain(cFrom, cTo, "tl")
-                if cornerType then
-                    transitionData[y][x] = cornerType
-                    cornerPlaced = true
-                end
-            end
-
-            if cornerPlaced then goto continue end
-
-            -- === 边缘过渡检测 ===
-            if hasHorizontalEdge and not hasVerticalEdge then
-                -- 纯水平边界 → 使用 LR 过渡
-                local lrType = self:FindEdgeTerrain(from, to, "lr")
+            if hDiff then
+                -- 水平边界：放LR过渡（当前瓦片位置，左=current 右=right）
+                local lrType = self:FindDirectionalEdge(current, right, "lr")
                 if lrType then
                     transitionData[y][x] = lrType
-                end
-            elseif hasVerticalEdge and not hasHorizontalEdge then
-                -- 纯垂直边界 → 使用 TB 过渡
-                local tbType = self:FindEdgeTerrain(from, to, "tb")
-                if tbType then
-                    transitionData[y][x] = tbType
-                end
-            elseif hasHorizontalEdge and hasVerticalEdge then
-                -- 同时有水平和垂直边界 → 优先使用渐变过渡
-                local gradType = self:FindGradientTerrain(from, to)
-                if gradType then
-                    transitionData[y][x] = gradType
-                else
-                    -- 没有渐变则尝试 LR
-                    local lrType = self:FindEdgeTerrain(from, to, "lr")
-                    if lrType then
-                        transitionData[y][x] = lrType
-                    end
+                    goto continue_trans
                 end
             end
 
-            ::continue::
+            if vDiff then
+                -- 垂直边界：放TB过渡（当前瓦片位置，上=current 下=bottom）
+                local tbType = self:FindDirectionalEdge(current, bottom, "tb")
+                if tbType then
+                    transitionData[y][x] = tbType
+                    goto continue_trans
+                end
+            end
+
+            ::continue_trans::
         end
     end
 
@@ -650,7 +530,74 @@ function TerrainTileMap:GenerateWithBiomes(seed, biomes, config)
         end
     end
 
-    print("[TerrainTileMap] Voronoi 生成完成: " .. regionCount .. " 个区块, 过渡宽度 " .. transitionWidth)
+    print("[TerrainTileMap] Voronoi 生成完成: " .. regionCount .. " 个区块")
+end
+
+--- 查找两种地形之间的方向性边缘过渡（保留方向信息，不标准化）
+--- LR贴图约定：左边是terrainA的颜色，右边是terrainB的颜色
+--- TB贴图约定：上面是terrainA的颜色，下面是terrainB的颜色
+---@param terrainA number 左侧/上方的地形（方向的起始端）
+---@param terrainB number 右侧/下方的地形（方向的目标端）
+---@param direction string "lr" 或 "tb"
+---@return number|nil 过渡地形类型
+function TerrainTileMap:FindDirectionalEdge(terrainA, terrainB, direction)
+    local T = TerrainTileMap.TERRAIN
+
+    -- 带方向的边缘映射：[fromTerrain][toTerrain][direction] = terrainType
+    -- 每对地形都有 LR 和 TB 两个方向的专用过渡贴图
+    -- 反向查找也支持（如 MUD→GRASS 使用 GRASS_MUD 的贴图）
+    local DIRECTIONAL_MAP = {
+        [T.GRASS] = {
+            [T.MUD]       = { lr = T.GRASS_MUD_LR,       tb = T.GRASS_MUD_TB },
+            [T.SWAMP]     = { lr = T.GRASS_SWAMP_LR,     tb = T.GRASS_SWAMP_TB },
+            [T.ROCKY]     = { lr = T.GRASS_ROCKY_LR,     tb = T.GRASS_ROCKY_TB },
+            [T.SAND]      = { lr = T.GRASS_SAND_LR,      tb = T.GRASS_SAND_LR },
+            [T.SNOW]      = { lr = T.GRASS_SNOW_TB,      tb = T.GRASS_SNOW_TB },
+            [T.DEAD_GRASS]= { lr = T.GRASS_DEADGRASS_LR, tb = T.GRASS_DEADGRASS_LR },
+        },
+        [T.MUD] = {
+            [T.SWAMP]     = { lr = T.MUD_SWAMP_LR,      tb = T.MUD_SWAMP_TB },
+            [T.ROCKY]     = { lr = T.MUD_ROCKY_LR,      tb = T.MUD_ROCKY_TB },
+            [T.GRASS]     = { lr = T.MUD_GRASS_LR,      tb = T.MUD_GRASS_TB },
+        },
+        [T.ROCKY] = {
+            [T.VOLCANIC]  = { lr = T.ROCKY_VOLCANIC_LR,  tb = T.ROCKY_VOLCANIC_TB },
+            [T.MUD]       = { lr = T.ROCKY_MUD_LR,      tb = T.ROCKY_MUD_TB },
+            [T.GRASS]     = { lr = T.ROCKY_GRASS_LR,    tb = T.ROCKY_GRASS_TB },
+        },
+        [T.SWAMP] = {
+            [T.GRASS]     = { lr = T.SWAMP_GRASS_LR,    tb = T.SWAMP_GRASS_TB },
+            [T.MUD]       = { lr = T.SWAMP_MUD_LR,      tb = T.SWAMP_MUD_TB },
+        },
+        [T.SAND] = {
+            [T.GRASS]     = { lr = T.SAND_GRASS_LR,     tb = T.SAND_GRASS_LR },
+        },
+        [T.SNOW] = {
+            [T.GRASS]     = { lr = T.SNOW_GRASS_TB,     tb = T.SNOW_GRASS_TB },
+        },
+        [T.DEAD_GRASS] = {
+            [T.GRASS]     = { lr = T.DEADGRASS_GRASS_LR, tb = T.DEADGRASS_GRASS_LR },
+        },
+        [T.VOLCANIC] = {
+            [T.ROCKY]     = { lr = T.VOLCANIC_ROCKY_LR,  tb = T.VOLCANIC_ROCKY_TB },
+        },
+    }
+
+    -- 正向查找
+    if DIRECTIONAL_MAP[terrainA] and DIRECTIONAL_MAP[terrainA][terrainB] then
+        local entry = DIRECTIONAL_MAP[terrainA][terrainB]
+        if entry[direction] then
+            return entry[direction]
+        end
+    end
+
+    -- 如果没有精确的方向性贴图，尝试用渐变贴图作为替代
+    local gradType = self:FindGradientTerrain(terrainA, terrainB)
+    if gradType then
+        return gradType
+    end
+
+    return nil
 end
 
 --- 查找两种地形之间的渐变/混合地形类型（用于对角线边界或无方向性的混合区域）
@@ -678,87 +625,6 @@ function TerrainTileMap:FindGradientTerrain(t1, t2)
     -- 反向查找
     if GRADIENT_MAP[t2] and GRADIENT_MAP[t2][t1] then
         return GRADIENT_MAP[t2][t1]
-    end
-
-    return nil
-end
-
---- 查找两种地形之间的方向性边缘过渡地形类型（LR 或 TB）
----@param t1 number 地形类型1（较小值）
----@param t2 number 地形类型2（较大值）
----@param direction string "lr" 或 "tb"
----@return number|nil 过渡地形类型
-function TerrainTileMap:FindEdgeTerrain(t1, t2, direction)
-    local T = TerrainTileMap.TERRAIN
-
-    -- 方向性边缘映射：[from][to][direction] = terrainType
-    local EDGE_MAP = {
-        [T.GRASS] = {
-            [T.MUD]       = { lr = T.GRASS_TO_MUD,       tb = T.GRASS_MUD_TB },
-            [T.SWAMP]     = { lr = T.GRASS_SWAMP_LR,     tb = T.GRASS_TO_SWAMP },
-            [T.ROCKY]     = { lr = T.GRASS_ROCKY_LR,     tb = T.GRASS_ROCKY_TB },
-            [T.SAND]      = { lr = T.GRASS_SAND_LR,      tb = T.GRASS_SAND_LR },  -- 只有LR素材，TB复用
-            [T.SNOW]      = { lr = T.GRASS_SNOW_TB,      tb = T.GRASS_SNOW_TB },  -- 只有TB素材，LR复用
-            [T.DEAD_GRASS]= { lr = T.GRASS_DEADGRASS_LR, tb = T.GRASS_DEADGRASS_LR },  -- 只有LR素材
-        },
-        [T.MUD] = {
-            [T.SWAMP]     = { lr = T.MUD_SWAMP_LR,      tb = T.MUD_SWAMP_TB },
-            [T.ROCKY]     = { lr = T.MUD_ROCKY_LR,      tb = T.MUD_ROCKY_LR },  -- 只有LR素材
-        },
-        [T.ROCKY] = {
-            [T.VOLCANIC]  = { lr = T.ROCKY_TO_VOLCANIC,  tb = T.ROCKY_VOLCANIC_TB },
-        },
-    }
-
-    -- 正向查找
-    if EDGE_MAP[t1] and EDGE_MAP[t1][t2] then
-        return EDGE_MAP[t1][t2][direction]
-    end
-    -- 反向查找
-    if EDGE_MAP[t2] and EDGE_MAP[t2][t1] then
-        return EDGE_MAP[t2][t1][direction]
-    end
-
-    return nil
-end
-
---- 查找两种地形之间的角落过渡地形类型
----@param t1 number 地形类型1（较小值）
----@param t2 number 地形类型2（较大值）
----@param corner string "tl" | "tr" | "bl" | "br"
----@return number|nil 角落地形类型
-function TerrainTileMap:FindCornerTerrain(t1, t2, corner)
-    local T = TerrainTileMap.TERRAIN
-
-    -- 角落映射：[from][to][corner] = terrainType
-    local CORNER_MAP = {
-        [T.GRASS] = {
-            [T.MUD] = {
-                tl = T.CORNER_GRASS_IN_MUD_TL,
-                tr = T.CORNER_GRASS_IN_MUD_TR,
-                bl = T.CORNER_GRASS_IN_MUD_BL,
-                br = T.CORNER_GRASS_IN_MUD_BR,
-            },
-            [T.SWAMP] = {
-                tl = T.CORNER_GRASS_IN_SWAMP_TL,
-                tr = T.CORNER_GRASS_IN_SWAMP_TR,
-            },
-        },
-        [T.ROCKY] = {
-            [T.VOLCANIC] = {
-                tl = T.CORNER_ROCKY_IN_VOLCANIC_TL,
-                tr = T.CORNER_ROCKY_IN_VOLCANIC_TR,
-            },
-        },
-    }
-
-    -- 正向查找
-    if CORNER_MAP[t1] and CORNER_MAP[t1][t2] and CORNER_MAP[t1][t2][corner] then
-        return CORNER_MAP[t1][t2][corner]
-    end
-    -- 反向查找
-    if CORNER_MAP[t2] and CORNER_MAP[t2][t1] and CORNER_MAP[t2][t1][corner] then
-        return CORNER_MAP[t2][t1][corner]
     end
 
     return nil
@@ -793,7 +659,8 @@ end
 -- ============================================================================
 
 --- 获取瓦片应使用的贴图路径（考虑过渡）
----@return string 贴图路径
+--- 过渡信息全部来自数据层（GenerateWithBiomes 或编辑器写入），渲染时不再做邻居检测
+---@return string? 贴图路径
 ---@return string 过渡类型: "base" | "edge_lr" | "edge_tb" | "corner" | "gradient"
 function TerrainTileMap:GetTileTexture(x, y)
     local current = self:GetTile(x, y)
@@ -803,12 +670,28 @@ function TerrainTileMap:GetTileTexture(x, y)
     if current > 10 then
         local texPath = BASE_TEXTURES[current]
         if texPath then
-            if current >= 22 and current <= 29 then
-                return texPath, "corner"
-            elseif current >= 17 and current <= 21 then
-                return texPath, "edge_tb"
-            elseif current >= 11 and current <= 16 then
+            -- LR 类型: 11-16(正向LR), 22(草泥LR), 25(石火LR),
+            --          33(泥草LR), 35(石草LR), 37(沼草LR), 39(沙草LR),
+            --          41(枯草LR), 42(沼泥LR), 44(石泥LR), 46(火石LR)
+            local LR_IDS = {
+                [11]=true, [12]=true, [13]=true, [14]=true, [15]=true, [16]=true,
+                [22]=true, [25]=true,
+                [33]=true, [35]=true, [37]=true, [39]=true, [41]=true,
+                [42]=true, [44]=true, [46]=true,
+            }
+            -- TB 类型: 17-21(正向TB), 23(草沼TB), 24(泥石TB),
+            --          34(泥草TB), 36(石草TB), 38(沼草TB), 40(雪草TB),
+            --          43(沼泥TB), 45(石泥TB), 47(火石TB)
+            local TB_IDS = {
+                [17]=true, [18]=true, [19]=true, [20]=true, [21]=true,
+                [23]=true, [24]=true,
+                [34]=true, [36]=true, [38]=true, [40]=true,
+                [43]=true, [45]=true, [47]=true,
+            }
+            if LR_IDS[current] then
                 return texPath, "edge_lr"
+            elseif TB_IDS[current] then
+                return texPath, "edge_tb"
             else
                 return texPath, "gradient"
             end
@@ -817,55 +700,7 @@ function TerrainTileMap:GetTileTexture(x, y)
         return BASE_TEXTURES[1], "base"
     end
 
-    -- 基础地形：尝试渲染时邻居检测（兼容手动编辑的地图）
-    local left   = self:GetTile(x - 1, y)
-    local right  = self:GetTile(x + 1, y)
-    local top    = self:GetTile(x, y - 1)
-    local bottom = self:GetTile(x, y + 1)
-
-    -- 只对基础地形邻居做检测（过渡类型邻居视为同类）
-    if left and left > 10 then left = current end
-    if right and right > 10 then right = current end
-    if top and top > 10 then top = current end
-    if bottom and bottom > 10 then bottom = current end
-
-    -- 检查左右过渡
-    if left and left ~= current and left <= 10 then
-        local edgeData = EDGE_TEXTURES[left] and EDGE_TEXTURES[left][current]
-        if edgeData and edgeData.lr then
-            return edgeData.lr, "edge_lr"
-        end
-    end
-
-    -- 检查上下过渡
-    if top and top ~= current and top <= 10 then
-        local edgeData = EDGE_TEXTURES[top] and EDGE_TEXTURES[top][current]
-        if edgeData and edgeData.tb then
-            return edgeData.tb, "edge_tb"
-        end
-    end
-
-    -- 检查角落过渡 (左上角是不同地形)
-    local topLeft = self:GetTile(x - 1, y - 1)
-    if topLeft and topLeft > 10 then topLeft = current end
-    if topLeft and topLeft ~= current and top == current and left == current then
-        local cornerData = CORNER_TEXTURES[topLeft] and CORNER_TEXTURES[topLeft][current]
-        if cornerData and cornerData.br then
-            return cornerData.br, "corner"
-        end
-    end
-
-    -- 检查角落过渡 (右上角)
-    local topRight = self:GetTile(x + 1, y - 1)
-    if topRight and topRight > 10 then topRight = current end
-    if topRight and topRight ~= current and top == current and right == current then
-        local cornerData = CORNER_TEXTURES[topRight] and CORNER_TEXTURES[topRight][current]
-        if cornerData and cornerData.bl then
-            return cornerData.bl, "corner"
-        end
-    end
-
-    -- 默认：基础贴图
+    -- 基础地形：直接返回基础贴图，不做运行时邻居检测
     return BASE_TEXTURES[current], "base"
 end
 

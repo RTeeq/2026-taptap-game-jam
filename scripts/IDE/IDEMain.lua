@@ -127,6 +127,9 @@ local propPanel = {
     hoveredField = nil,     -- 悬停的属性字段
 }
 
+-- 前向声明
+local getLevelEditorSelectedObj
+
 -- ============================================================
 -- 初始化 / 销毁
 -- ============================================================
@@ -447,6 +450,29 @@ function M.Update(dt, inputSys, deviceDpr)
                     break
                 end
             end
+        else
+            -- LevelEditor 物件悬停检测
+            local leObj, leFields = getLevelEditorSelectedObj()
+            if leObj and leFields then
+                local ly = TOOLBAR_H + 34
+                local PROP_H = 26
+                local GROUP_H = 20
+                local rx = screenW - RIGHT_PANEL_W
+                local offsetY = 0
+                for i, prop in ipairs(leFields) do
+                    if prop.group then
+                        offsetY = offsetY + GROUP_H
+                    end
+                    local itemY = ly + offsetY
+                    if mouse.y >= itemY and mouse.y < itemY + PROP_H and prop.editable then
+                        if mouse.x >= rx + RIGHT_PANEL_W * 0.4 then
+                            propPanel.hoveredField = prop.field
+                        end
+                        break
+                    end
+                    offsetY = offsetY + PROP_H
+                end
+            end
         end
     end
 
@@ -506,9 +532,33 @@ function M.HandleMouseDown(button)
         return handleToolbarClick(sx, sy)
     end
 
-    -- 关卡模式: 委托给 LevelEditor
+    -- 关卡模式: 右面板/左面板点击优先，但底部工具栏区域交给 LevelEditor
     if currentMode == "level" and levelEditor and levelEditor.active then
+        local dpr = graphics:GetDPR()
+        local logH = graphics:GetHeight() / dpr
+        local inBottomBar = (sy >= logH - 300)  -- LevelEditor TOOLBAR_H = 300
+        if not inBottomBar and isInRightPanel(sx, sy) then
+            handleRightPanelClick(sx, sy)
+            return true
+        end
+        if not inBottomBar and isInLeftPanel(sx, sy) then
+            if propEdit.active then confirmPropertyEdit() end
+            handleLeftPanelClick(sx, sy)
+            return true
+        end
         levelEditor:HandleMouseDown(button)
+        -- 选中物件后自动切换到属性Tab
+        if button == MOUSEB_LEFT then
+            local hasSelection = false
+            if levelEditor.selectedType == "object" and levelEditor.selectedIdx then
+                hasSelection = true
+            elseif levelEditor.editSelected and levelEditor.editSelected.type == "object" and levelEditor.editSelected.idx then
+                hasSelection = true
+            end
+            if hasSelection then
+                rightPanelTab = "properties"
+            end
+        end
         return true
     end
 
@@ -850,6 +900,15 @@ function M.HandleTextInput(text)
 
     -- 属性编辑模式: 接收文本输入
     if propEdit.active then
+        -- 数值字段过滤: 只允许数字、小数点、负号
+        local numericFields = { x=true, y=true, z=true, w=true, h=true, rotation=true,
+            size=true, height=true, branches=true, twist=true, seed=true, variant=true, angle=true }
+        if numericFields[propEdit.field] then
+            -- 只保留合法字符
+            local filtered = text:gsub("[^%d%.%-]", "")
+            if #filtered == 0 then return true end
+            text = filtered
+        end
         -- 插入字符到光标位置
         local before = propEdit.text:sub(1, propEdit.cursorPos)
         local after = propEdit.text:sub(propEdit.cursorPos + 1)
@@ -942,6 +1001,9 @@ end
 -- 右面板交互
 -- ============================================================
 function handleRightPanelClick(sx, sy)
+    -- 点击右面板任何位置先确认当前编辑
+    if propEdit.active then confirmPropertyEdit() end
+
     local x = screenW - RIGHT_PANEL_W
     local w = RIGHT_PANEL_W
 
@@ -992,29 +1054,50 @@ function handleRightPanelClick(sx, sy)
 
     if currentMode == "level" or currentMode == "scene" then
         local sel = SceneManager:getSelected()
-        if not sel then return end
-
-        -- 属性字段定义 (field, label, editable)
-        local fields = {
-            { field = "name",     label = "名称",   editable = true },
-            { field = "type",     label = "类型",   editable = false },
-            { field = "x",        label = "X",      editable = true },
-            { field = "y",        label = "Y",      editable = true },
-            { field = "w",        label = "宽度",   editable = true },
-            { field = "h",        label = "高度",   editable = true },
-            { field = "rotation", label = "旋转",   editable = true },
-            { field = "layer",    label = "图层",   editable = false },
-        }
-        local PROP_H = 26
-        for i, prop in ipairs(fields) do
-            local itemY = ly + (i - 1) * PROP_H
-            if sy >= itemY and sy < itemY + PROP_H and prop.editable then
-                -- 点击值区域(右半部分)进入编辑
-                if sx >= x + w * 0.4 then
-                    startPropertyEdit(sel, prop.field)
-                    return
+        if sel then
+            -- SceneManager 对象属性编辑
+            local fields = {
+                { field = "name",     label = "名称",   editable = true },
+                { field = "type",     label = "类型",   editable = false },
+                { field = "x",        label = "X",      editable = true },
+                { field = "y",        label = "Y",      editable = true },
+                { field = "w",        label = "宽度",   editable = true },
+                { field = "h",        label = "高度",   editable = true },
+                { field = "rotation", label = "旋转",   editable = true },
+                { field = "layer",    label = "图层",   editable = false },
+            }
+            local PROP_H = 26
+            for i, prop in ipairs(fields) do
+                local itemY = ly + (i - 1) * PROP_H
+                if sy >= itemY and sy < itemY + PROP_H and prop.editable then
+                    if sx >= x + w * 0.4 then
+                        startPropertyEdit(sel, prop.field)
+                        return
+                    end
                 end
             end
+        else
+            -- LevelEditor 物件属性编辑
+            local leObj, leFields = getLevelEditorSelectedObj()
+            if leObj and leFields then
+                local PROP_H = 26
+                local GROUP_H = 20
+                local offsetY = 0
+                for i, prop in ipairs(leFields) do
+                    if prop.group then
+                        offsetY = offsetY + GROUP_H
+                    end
+                    local itemY = ly + offsetY
+                    if sy >= itemY and sy < itemY + PROP_H and prop.editable then
+                        if sx >= x + w * 0.4 then
+                            startPropertyEdit(leObj, prop.field)
+                            return
+                        end
+                    end
+                    offsetY = offsetY + PROP_H
+                end
+            end
+            return
         end
     elseif currentMode == "node" then
         local sel = NodeEditor:getSelectedNode()
@@ -1029,14 +1112,15 @@ function startPropertyEdit(obj, field)
     if value == nil then value = "" end
     propEdit.active = true
     propEdit.field = field
-    propEdit.targetId = obj.id
+    -- LevelEditor 物件没有 id，使用特殊标记
+    propEdit.targetId = obj.id or "le_obj"
     propEdit.cursorBlink = 0
 
     -- 将值转为字符串
     if type(value) == "number" then
-        propEdit.text = string.format("%.1f", value)
-        -- 去除多余的 .0
-        propEdit.text = propEdit.text:gsub("%.0$", "")
+        propEdit.text = string.format("%.2f", value)
+        -- 去除多余的尾零
+        propEdit.text = propEdit.text:gsub("%.?0+$", "")
     else
         propEdit.text = tostring(value)
     end
@@ -1046,6 +1130,26 @@ end
 --- 确认属性编辑
 function confirmPropertyEdit()
     if not propEdit.active then return end
+
+    -- LevelEditor 物件编辑
+    if propEdit.targetId == "le_obj" then
+        local leObj = getLevelEditorSelectedObj()
+        if not leObj then
+            propEdit.active = false
+            return
+        end
+        local field = propEdit.field
+        local text = propEdit.text
+        local num = tonumber(text)
+        if num then
+            leObj[field] = num
+        end
+        propEdit.active = false
+        propEdit.field = nil
+        return
+    end
+
+    -- SceneManager 对象编辑
     local obj = SceneManager:getObjectById(propEdit.targetId)
     if not obj then
         propEdit.active = false
@@ -1774,6 +1878,66 @@ function renderRightPanel()
 end
 
 -- ============================================================
+-- 右面板: LevelEditor 物件属性辅助
+-- ============================================================
+
+--- 获取 LevelEditor 当前选中的物件对象
+---@return table|nil obj, table|nil fields
+function getLevelEditorSelectedObj()
+    if not levelEditor or not levelEditor.active then
+        -- print("[DEBUG] getLevelEditorSelectedObj: levelEditor nil or not active")
+        return nil, nil
+    end
+    -- 支持绘制模式(selectedType/selectedIdx)和编辑模式(editSelected)两种选择系统
+    local selType = levelEditor.selectedType
+    local selIdx = levelEditor.selectedIdx
+    -- 编辑模式使用 editSelected
+    if (not selType or selType ~= "object" or not selIdx) and levelEditor.editSelected then
+        if levelEditor.editSelected.type == "object" and levelEditor.editSelected.idx then
+            selType = "object"
+            selIdx = levelEditor.editSelected.idx
+        end
+    end
+    if selType ~= "object" or not selIdx then return nil, nil end
+    local decos = levelEditor:GetMapDecorations()
+    if not decos then return nil, nil end
+    local obj = decos[selIdx]
+    if not obj then return nil, nil end
+
+    -- 为没有 z/rotation/size 的物件提供默认值
+    if obj.z == nil then obj.z = 0 end
+    if obj.rotation == nil then obj.rotation = 0 end
+    if obj.size == nil and obj.type ~= "tree" then obj.size = 15 end
+
+    -- 通用变换属性: 位置(xyz)、大小、旋转 + 类型特有属性
+    local fields = {
+        { field = "type",     label = "类型",   editable = false },
+        { field = "x",        label = "X",      editable = true,  group = "位置" },
+        { field = "y",        label = "Y",      editable = true },
+        { field = "z",        label = "Z",      editable = true },
+        { field = "rotation", label = "旋转",   editable = true,  group = "变换" },
+    }
+    -- 大小属性
+    if obj.type == "tree" then
+        table.insert(fields, { field = "height", label = "大小", editable = true })
+    else
+        table.insert(fields, { field = "size",   label = "大小", editable = true })
+    end
+    -- 类型特有属性
+    if obj.type == "tree" then
+        table.insert(fields, { field = "branches", label = "枝干数", editable = true,  group = "属性" })
+        table.insert(fields, { field = "twist",    label = "扭曲",   editable = true })
+        table.insert(fields, { field = "seed",     label = "种子",   editable = true })
+    elseif obj.type == "rock" then
+        table.insert(fields, { field = "seed",    label = "种子",   editable = true, group = "属性" })
+    elseif obj.type == "flower" or obj.type == "plant" then
+        table.insert(fields, { field = "variant", label = "变体",   editable = true, group = "属性" })
+        table.insert(fields, { field = "seed",    label = "种子",   editable = true })
+    end
+    return obj, fields
+end
+
+-- ============================================================
 -- 右面板: 属性内容
 -- ============================================================
 function renderPropertiesContent(x, y, w, h)
@@ -1799,13 +1963,44 @@ function renderPropertiesContent(x, y, w, h)
                 renderPropertyField(x, itemY, w, prop.label, sel[prop.field], prop.editable, isEditing, isHovered, prop.field)
             end
         else
-            nvgFontFace(vg, "ide-sans")
-            nvgFontSize(vg, 11)
-            nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
-            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-            nvgText(vg, x + 8, ly + 10, "未选中对象")
-            nvgFontSize(vg, 10)
-            nvgText(vg, x + 8, ly + 28, "在画布中点击选择对象")
+            -- 检查 LevelEditor 是否有选中物件
+            local leObj, leFields = getLevelEditorSelectedObj()
+            if leObj and leFields then
+                local PROP_H = 26
+                local GROUP_H = 20
+                local offsetY = 0
+                for i, prop in ipairs(leFields) do
+                    -- 分组标题
+                    if prop.group then
+                        nvgFontFace(vg, "ide-sans")
+                        nvgFontSize(vg, 9)
+                        nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 180))
+                        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+                        nvgText(vg, x + 8, ly + offsetY + GROUP_H / 2, prop.group)
+                        offsetY = offsetY + GROUP_H
+                    end
+                    local itemY = ly + offsetY
+                    local isEditing = propEdit.active and propEdit.field == prop.field and propEdit.targetId == "le_obj"
+                    local isHovered = (propPanel.hoveredField == prop.field)
+                    local val = leObj[prop.field]
+                    if prop.field == "type" then
+                        local typeNames = { tree = "树木", rock = "岩石", flower = "花朵", plant = "植物", deadtree = "枯树" }
+                        val = typeNames[val] or val
+                    elseif type(val) == "number" then
+                        val = math.floor(val * 100) / 100  -- 保留2位小数
+                    end
+                    renderPropertyField(x, itemY, w, prop.label, val, prop.editable, isEditing, isHovered, prop.field)
+                    offsetY = offsetY + PROP_H
+                end
+            else
+                nvgFontFace(vg, "ide-sans")
+                nvgFontSize(vg, 11)
+                nvgFillColor(vg, nvgRGBA(Config.COLORS.textDim[1], Config.COLORS.textDim[2], Config.COLORS.textDim[3], 255))
+                nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+                nvgText(vg, x + 8, ly + 10, "未选中对象")
+                nvgFontSize(vg, 10)
+                nvgText(vg, x + 8, ly + 28, "在画布中点击选择对象")
+            end
         end
     else
         local sel = NodeEditor:getSelectedNode()

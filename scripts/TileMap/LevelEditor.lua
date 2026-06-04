@@ -6,6 +6,9 @@
 
 local TerrainTileMap = require("TileMap.TerrainTileMap")
 
+---@class LevelEditor
+---@field editorCamX number
+---@field editorCamY number
 local LevelEditor = {}
 LevelEditor.__index = LevelEditor
 
@@ -172,6 +175,12 @@ function LevelEditor.New(vg, config)
     self.editDragOffX = 0
     self.editDragOffY = 0
 
+    -- Gizmo 模式: "move"(1), "scale"(2), "rotate"(3)
+    self.gizmoMode = "move"
+    self.gizmoDragAxis = nil    -- 拖拽中的轴: "x"|"y"|nil
+    self.gizmoDragStart = nil   -- 拖拽起始世界坐标 {x, y}
+    self.gizmoOrigVal = nil     -- 拖拽前的原始值
+
     -- 地形瓦片(地形模式专用) — 每格64px, 以毒圈中心为基准
     local tilePixel = 64
     local tileCount = math.floor(self.mapPixelSize / tilePixel)
@@ -184,14 +193,17 @@ function LevelEditor.New(vg, config)
     self.tilePixel = tilePixel
     self.tileCount = tileCount
 
-    -- 游戏启动时使用固定种子代码生成地形
+    -- 游戏启动时加载预设地图数据（完整关卡：地形+物件+舒适区）
     self.seedCode = ""
     self.lastGenerateSeed = 0
     self.terrainExported = false
-    self:ImportSeedCode("3645817920687")
+    local defaultMapJson = require("TileMap.DefaultMapData")
+    self:ImportFullLevel(defaultMapJson)
 
     -- 编辑器相机(编辑器激活时接管游戏相机, 定位到游戏地图中心)
+    ---@type number
     self.editorCamX = (config.mapCenter and config.mapCenter.x) or self.mapPixelSize / 2
+    ---@type number
     self.editorCamY = (config.mapCenter and config.mapCenter.y) or self.mapPixelSize / 2
     self.editorZoom = 1.0
     self.savedCamX = 0
@@ -224,8 +236,8 @@ function LevelEditor.New(vg, config)
         radius = self.mapPixelSize * 0.35,
     }
 
-    -- 地形是否已导出
-    self.terrainExported = false
+    -- 地形是否已导出（由 ImportFullLevel 设置为 true，此处不再重置）
+    -- self.terrainExported 已在 ImportFullLevel 中正确设置
 
     -- 工具栏贴图(在 InitImages 中加载)
     self.terrainIcons = {}   -- { [1..7] = nvgImageHandle }
@@ -402,14 +414,12 @@ function LevelEditor:HandleKeyDown(key)
         local T = self.tileMap.TERRAIN
         self.lastGenerateSeed = os.time()
         self.tileMap:GenerateWithBiomes(self.lastGenerateSeed, {
-            [T.GRASS] = 5, [T.MUD] = 3, [T.SWAMP] = 2,
+            [T.GRASS] = 5, [T.MUD] = 3,
         }, {
             regionCount = 18,
             transitionWidth = 2.5,
             jitter = 0.7,
         })
-        -- 后处理: 安全圈内的沼泽替换为草地（沼泽只保留在毒圈区域）
-        self:RemoveSwampInsideCircle()
         self.terrainExported = true
         -- 同时重新生成物件(树木、岩石、花朵、植物)
         if RegenerateMapDecorations then
@@ -447,6 +457,27 @@ function LevelEditor:HandleKeyDown(key)
     if self.editorMode == EDITOR_MODE_EDIT then
         if key == KEY_DELETE or key == KEY_BACKSPACE then
             self:EditModeDeleteSelected()
+            return true
+        end
+        -- E: 翻转选中对象
+        if key == KEY_E then
+            self:EditModeFlipSelected()
+            return true
+        end
+        -- 1/2/3: 切换 Gizmo 模式
+        if key == KEY_1 then
+            self.gizmoMode = "move"
+            print("[编辑器] Gizmo: 移动模式")
+            return true
+        end
+        if key == KEY_2 then
+            self.gizmoMode = "scale"
+            print("[编辑器] Gizmo: 缩放模式")
+            return true
+        end
+        if key == KEY_3 then
+            self.gizmoMode = "rotate"
+            print("[编辑器] Gizmo: 旋转模式")
             return true
         end
         -- R: 旋转选中对象 +15度
@@ -572,6 +603,9 @@ function LevelEditor:HandleMouseUp(button)
         self.dragging = false
         self.dragTarget = nil
         self.editAction = nil
+        self.gizmoDragAxis = nil
+        self.gizmoDragStart = nil
+        self.gizmoOrigVal = nil
         return true
     end
     return false
@@ -997,8 +1031,8 @@ function LevelEditor:Update(dt, inputRef, dpr)
         self:HandleDrag(wx, wy)
     end
 
-    -- 编辑模式拖拽(移动对象)
-    if self.editorMode == EDITOR_MODE_EDIT and self.editAction == "move" and self.editSelected then
+    -- 编辑模式拖拽(移动/缩放/旋转对象)
+    if self.editorMode == EDITOR_MODE_EDIT and self.editAction and self.editSelected then
         local mx = inputRef.mousePosition.x / dpr
         local my = inputRef.mousePosition.y / dpr
         local wx, wy = self:ScreenToWorld(mx, my, dpr)
@@ -1036,13 +1070,18 @@ function LevelEditor:HandleObjectMouseDown()
     local my = input.mousePosition.y / dpr
     local wx, wy = self:ScreenToWorld(mx, my, dpr)
 
+    -- 计算最小世界空间命中半径（确保屏幕上至少有12像素可点击区域）
+    local totalZoom = 2.0 * self.editorZoom
+    local minHitR = 12 / totalZoom  -- 屏幕12像素对应的世界半径
+
     local decos = self:GetMapDecorations()
     if decos then
         for i = #decos, 1, -1 do
             local obj = decos[i]
             local dx = obj.x - wx
             local dy = obj.y - wy
-            local hitR = (obj.type == "tree") and 30 or (obj.size or 15)
+            local baseHitR = (obj.type == "tree") and 30 or (obj.size or 15)
+            local hitR = math.max(baseHitR, minHitR)
             if dx*dx + dy*dy < hitR * hitR then
                 self.selectedType = "object"
                 self.selectedIdx = i
@@ -1051,6 +1090,7 @@ function LevelEditor:HandleObjectMouseDown()
                 self.dragIdx = i
                 self.dragOffX = obj.x - wx
                 self.dragOffY = obj.y - wy
+                print("[属性面板] 选中物件: " .. obj.type .. " #" .. i .. " hitR=" .. math.floor(hitR))
                 return
             end
         end
@@ -1287,6 +1327,81 @@ function LevelEditor:HandleEditModeMouseDown()
     local my = input.mousePosition.y / dpr
     local wx, wy = self:ScreenToWorld(mx, my, dpr)
 
+    -- 计算最小世界空间命中半径（确保屏幕上至少有12像素可点击区域）
+    local totalZoom = 2.0 * self.editorZoom
+    local minHitR = 12 / totalZoom
+
+    -- 如果已有选中对象，优先检测 Gizmo 轴点击
+    if self.editSelected then
+        local selObj = self:GetSelectedEditObject()
+        if selObj then
+            local axisLen = 50 / totalZoom
+            local hitDist = 10 / totalZoom  -- 轴命中容差
+
+            if self.gizmoMode == "move" then
+                -- 检测 X 轴点击
+                local dxFromObj = wx - selObj.x
+                local dyFromObj = wy - selObj.y
+                if dxFromObj > 0 and dxFromObj < axisLen and math.abs(dyFromObj) < hitDist then
+                    self.editAction = "move"
+                    self.gizmoDragAxis = "x"
+                    self.editDragOffX = selObj.x - wx
+                    self.editDragOffY = selObj.y - wy
+                    return
+                end
+                -- 检测 Y 轴点击(屏幕Y向下，世界Y向上)
+                if dyFromObj < 0 and dyFromObj > -axisLen and math.abs(dxFromObj) < hitDist then
+                    self.editAction = "move"
+                    self.gizmoDragAxis = "y"
+                    self.editDragOffX = selObj.x - wx
+                    self.editDragOffY = selObj.y - wy
+                    return
+                end
+                -- 中心方块：自由移动
+                if math.abs(dxFromObj) < hitDist and math.abs(dyFromObj) < hitDist then
+                    self.editAction = "move"
+                    self.gizmoDragAxis = nil
+                    self.editDragOffX = selObj.x - wx
+                    self.editDragOffY = selObj.y - wy
+                    return
+                end
+
+            elseif self.gizmoMode == "scale" then
+                local dxFromObj = wx - selObj.x
+                local dyFromObj = wy - selObj.y
+                -- 检测轴或中心
+                local onX = dxFromObj > 0 and dxFromObj < axisLen and math.abs(dyFromObj) < hitDist
+                local onY = dyFromObj < 0 and dyFromObj > -axisLen and math.abs(dxFromObj) < hitDist
+                local onCenter = math.abs(dxFromObj) < hitDist and math.abs(dyFromObj) < hitDist
+                if onX or onY or onCenter then
+                    self.editAction = "scale"
+                    self.gizmoDragAxis = onX and "x" or (onY and "y" or nil)
+                    self.gizmoDragStart = { x = wx, y = wy }
+                    if selObj.type == "tree" then
+                        self.gizmoOrigVal = selObj.height or 80
+                    else
+                        self.gizmoOrigVal = selObj.size or 15
+                    end
+                    return
+                end
+
+            elseif self.gizmoMode == "rotate" then
+                local dxFromObj = wx - selObj.x
+                local dyFromObj = wy - selObj.y
+                local dist = math.sqrt(dxFromObj * dxFromObj + dyFromObj * dyFromObj)
+                local radius = axisLen * 0.8
+                -- 点击圆弧附近或圆内
+                if dist < radius + hitDist then
+                    self.editAction = "rotate"
+                    self.gizmoDragAxis = nil
+                    self.gizmoDragStart = { x = wx, y = wy }
+                    self.gizmoOrigVal = selObj.angle or 0
+                    return
+                end
+            end
+        end
+    end
+
     -- 尝试点选物件
     local decos = self:GetMapDecorations()
     if decos then
@@ -1294,12 +1409,15 @@ function LevelEditor:HandleEditModeMouseDown()
             local obj = decos[i]
             local dx = obj.x - wx
             local dy = obj.y - wy
-            local hitR = (obj.type == "tree") and 30 or (obj.size or 15)
+            local baseHitR = (obj.type == "tree") and 30 or (obj.size or 15)
+            local hitR = math.max(baseHitR, minHitR)
             if dx * dx + dy * dy < hitR * hitR then
                 self.editSelected = { type = "object", idx = i }
                 self.editAction = "move"
+                self.gizmoDragAxis = nil
                 self.editDragOffX = obj.x - wx
                 self.editDragOffY = obj.y - wy
+                print("[属性面板] 编辑模式选中: " .. obj.type .. " #" .. i)
                 return
             end
         end
@@ -1315,6 +1433,7 @@ function LevelEditor:HandleEditModeMouseDown()
             if dx * dx + dy * dy < 60 * 60 then
                 self.editSelected = { type = "comfort", idx = i }
                 self.editAction = "move"
+                self.gizmoDragAxis = nil
                 self.editDragOffX = z.x - wx
                 self.editDragOffY = z.y - wy
                 return
@@ -1325,24 +1444,74 @@ function LevelEditor:HandleEditModeMouseDown()
     -- 点击空白处: 取消选择
     self.editSelected = nil
     self.editAction = nil
+    self.gizmoDragAxis = nil
 end
 
---- 编辑模式: 拖拽移动
+--- 获取当前编辑选中的对象数据
+function LevelEditor:GetSelectedEditObject()
+    if not self.editSelected then return nil end
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        return decos and decos[self.editSelected.idx]
+    elseif self.editSelected.type == "comfort" then
+        local zones = self:GetComfortZones()
+        return zones and zones[self.editSelected.idx]
+    end
+    return nil
+end
+
+--- 编辑模式: 拖拽(移动/缩放/旋转)
 function LevelEditor:HandleEditModeDrag(wx, wy)
     if not self.editSelected then return end
 
-    if self.editSelected.type == "object" then
-        local decos = self:GetMapDecorations()
-        if decos and decos[self.editSelected.idx] then
-            decos[self.editSelected.idx].x = wx + self.editDragOffX
-            decos[self.editSelected.idx].y = wy + self.editDragOffY
+    local selObj = self:GetSelectedEditObject()
+    if not selObj then return end
+
+    if self.editAction == "move" then
+        -- 移动: 支持轴约束
+        local newX = wx + self.editDragOffX
+        local newY = wy + self.editDragOffY
+        if self.gizmoDragAxis == "x" then
+            selObj.x = newX
+        elseif self.gizmoDragAxis == "y" then
+            selObj.y = newY
+        else
+            selObj.x = newX
+            selObj.y = newY
         end
-    elseif self.editSelected.type == "comfort" then
-        local zones = self:GetComfortZones()
-        if zones and zones[self.editSelected.idx] then
-            zones[self.editSelected.idx].x = wx + self.editDragOffX
-            zones[self.editSelected.idx].y = wy + self.editDragOffY
+
+    elseif self.editAction == "scale" and self.gizmoDragStart then
+        -- 缩放: 基于拖拽距离计算缩放比例
+        local dx = wx - self.gizmoDragStart.x
+        local dy = -(wy - self.gizmoDragStart.y)  -- Y轴向上为正
+        local delta
+        if self.gizmoDragAxis == "x" then
+            delta = dx
+        elseif self.gizmoDragAxis == "y" then
+            delta = dy
+        else
+            delta = (dx + dy) * 0.5
         end
+        -- 每拖拽50像素(世界空间)缩放1倍
+        local factor = 1.0 + delta / 50.0
+        factor = math.max(0.1, math.min(5.0, factor))
+        if selObj.type == "tree" then
+            selObj.height = self.gizmoOrigVal * factor
+        else
+            selObj.size = self.gizmoOrigVal * factor
+        end
+
+    elseif self.editAction == "rotate" and self.gizmoDragStart then
+        -- 旋转: 基于鼠标相对物体中心的角度
+        local dx = wx - selObj.x
+        local dy = -(wy - selObj.y)  -- 屏幕Y朝下，取反
+        local angle = math.atan(dy, dx) * 180 / math.pi
+        -- 起始角度
+        local sdx = self.gizmoDragStart.x - selObj.x
+        local sdy = -(self.gizmoDragStart.y - selObj.y)
+        local startAngle = math.atan(sdy, sdx) * 180 / math.pi
+        local deltaAngle = angle - startAngle
+        selObj.angle = self.gizmoOrigVal + deltaAngle
     end
 end
 
@@ -1396,7 +1565,21 @@ function LevelEditor:EditModeRotateSelected(degrees)
         local obj = decos and decos[self.editSelected.idx]
         if obj then
             obj.angle = (obj.angle or 0) + degrees
-            print(string.format("[编辑器] 旋转: %d°", obj.angle))
+            print(string.format("[编辑器] 旋转: %.0f°", obj.angle))
+        end
+    end
+end
+
+--- 编辑模式: 翻转选中对象(水平镜像)
+function LevelEditor:EditModeFlipSelected()
+    if not self.editSelected then return end
+
+    if self.editSelected.type == "object" then
+        local decos = self:GetMapDecorations()
+        local obj = decos and decos[self.editSelected.idx]
+        if obj then
+            obj.flipX = not obj.flipX
+            print("[编辑器] 翻转: " .. (obj.flipX and "已翻转" or "已恢复"))
         end
     end
 end
@@ -1612,7 +1795,7 @@ function LevelEditor:Render(logW, logH, dpr)
             end
         end
 
-        -- 选中对象: 强高亮(亮黄色粗框 + 十字移动图标)
+        -- 选中对象: Gizmo 显示
         if self.editSelected then
             local ox, oy, hr
             if self.editSelected.type == "object" then
@@ -1630,23 +1813,133 @@ function LevelEditor:Render(logW, logH, dpr)
             end
 
             if ox and oy then
-                -- 选中框(亮黄色)
+                -- 选中框(亮黄色虚线)
                 nvgBeginPath(ctx)
                 nvgCircle(ctx, ox, oy, hr)
-                nvgStrokeColor(ctx, nvgRGBA(255, 255, 0, 255))
-                nvgStrokeWidth(ctx, 2.5 / totalZoom)
-                nvgStroke(ctx)
-
-                -- 十字移动指示器
-                local crossSize = 12 / totalZoom
-                nvgBeginPath(ctx)
-                nvgMoveTo(ctx, ox - crossSize, oy)
-                nvgLineTo(ctx, ox + crossSize, oy)
-                nvgMoveTo(ctx, ox, oy - crossSize)
-                nvgLineTo(ctx, ox, oy + crossSize)
-                nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 200))
+                nvgStrokeColor(ctx, nvgRGBA(255, 255, 0, 180))
                 nvgStrokeWidth(ctx, 1.5 / totalZoom)
                 nvgStroke(ctx)
+
+                -- Gizmo 轴长度(屏幕空间固定大小)
+                local axisLen = 50 / totalZoom
+                local arrowSize = 8 / totalZoom
+                local lineW = 2.5 / totalZoom
+
+                if self.gizmoMode == "move" then
+                    -- ===== 移动 Gizmo: X轴(红) + Y轴(绿) 带箭头 =====
+                    -- X 轴(红色 →)
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox, oy)
+                    nvgLineTo(ctx, ox + axisLen, oy)
+                    nvgStrokeColor(ctx, nvgRGBA(255, 60, 60, 255))
+                    nvgStrokeWidth(ctx, lineW)
+                    nvgStroke(ctx)
+                    -- X 箭头
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox + axisLen, oy)
+                    nvgLineTo(ctx, ox + axisLen - arrowSize, oy - arrowSize * 0.5)
+                    nvgLineTo(ctx, ox + axisLen - arrowSize, oy + arrowSize * 0.5)
+                    nvgClosePath(ctx)
+                    nvgFillColor(ctx, nvgRGBA(255, 60, 60, 255))
+                    nvgFill(ctx)
+
+                    -- Y 轴(绿色 ↑) 注意屏幕空间Y朝下，所以往上是 -Y
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox, oy)
+                    nvgLineTo(ctx, ox, oy - axisLen)
+                    nvgStrokeColor(ctx, nvgRGBA(60, 220, 60, 255))
+                    nvgStrokeWidth(ctx, lineW)
+                    nvgStroke(ctx)
+                    -- Y 箭头
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox, oy - axisLen)
+                    nvgLineTo(ctx, ox - arrowSize * 0.5, oy - axisLen + arrowSize)
+                    nvgLineTo(ctx, ox + arrowSize * 0.5, oy - axisLen + arrowSize)
+                    nvgClosePath(ctx)
+                    nvgFillColor(ctx, nvgRGBA(60, 220, 60, 255))
+                    nvgFill(ctx)
+
+                    -- 中心方块(黄色，同时移动XY)
+                    local sq = 6 / totalZoom
+                    nvgBeginPath(ctx)
+                    nvgRect(ctx, ox - sq * 0.5, oy - sq * 0.5, sq, sq)
+                    nvgFillColor(ctx, nvgRGBA(255, 255, 0, 200))
+                    nvgFill(ctx)
+
+                elseif self.gizmoMode == "scale" then
+                    -- ===== 缩放 Gizmo: X轴(红) + Y轴(绿) 带方块 =====
+                    local boxSize = 6 / totalZoom
+
+                    -- X 轴(红色)
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox, oy)
+                    nvgLineTo(ctx, ox + axisLen, oy)
+                    nvgStrokeColor(ctx, nvgRGBA(255, 60, 60, 255))
+                    nvgStrokeWidth(ctx, lineW)
+                    nvgStroke(ctx)
+                    -- X 方块
+                    nvgBeginPath(ctx)
+                    nvgRect(ctx, ox + axisLen - boxSize, oy - boxSize * 0.5, boxSize, boxSize)
+                    nvgFillColor(ctx, nvgRGBA(255, 60, 60, 255))
+                    nvgFill(ctx)
+
+                    -- Y 轴(绿色)
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox, oy)
+                    nvgLineTo(ctx, ox, oy - axisLen)
+                    nvgStrokeColor(ctx, nvgRGBA(60, 220, 60, 255))
+                    nvgStrokeWidth(ctx, lineW)
+                    nvgStroke(ctx)
+                    -- Y 方块
+                    nvgBeginPath(ctx)
+                    nvgRect(ctx, ox - boxSize * 0.5, oy - axisLen, boxSize, boxSize)
+                    nvgFillColor(ctx, nvgRGBA(60, 220, 60, 255))
+                    nvgFill(ctx)
+
+                    -- 中心方块(黄色，均匀缩放)
+                    local sq = 8 / totalZoom
+                    nvgBeginPath(ctx)
+                    nvgRect(ctx, ox - sq * 0.5, oy - sq * 0.5, sq, sq)
+                    nvgFillColor(ctx, nvgRGBA(255, 255, 0, 200))
+                    nvgFill(ctx)
+
+                elseif self.gizmoMode == "rotate" then
+                    -- ===== 旋转 Gizmo: 圆弧 + 角度指示 =====
+                    local radius = axisLen * 0.8
+                    nvgBeginPath(ctx)
+                    nvgArc(ctx, ox, oy, radius, 0, math.pi * 2, 1)
+                    nvgStrokeColor(ctx, nvgRGBA(100, 150, 255, 200))
+                    nvgStrokeWidth(ctx, lineW)
+                    nvgStroke(ctx)
+
+                    -- 当前角度指示线
+                    local obj = nil
+                    if self.editSelected.type == "object" then
+                        obj = decos and decos[self.editSelected.idx]
+                    end
+                    local angle = (obj and obj.angle or 0) * math.pi / 180
+                    nvgBeginPath(ctx)
+                    nvgMoveTo(ctx, ox, oy)
+                    nvgLineTo(ctx, ox + math.cos(angle) * radius, oy - math.sin(angle) * radius)
+                    nvgStrokeColor(ctx, nvgRGBA(255, 200, 50, 255))
+                    nvgStrokeWidth(ctx, lineW * 1.2)
+                    nvgStroke(ctx)
+
+                    -- 小圆点(旋转手柄)
+                    nvgBeginPath(ctx)
+                    nvgCircle(ctx, ox + math.cos(angle) * radius, oy - math.sin(angle) * radius, 4 / totalZoom)
+                    nvgFillColor(ctx, nvgRGBA(255, 200, 50, 255))
+                    nvgFill(ctx)
+                end
+
+                -- 模式文字提示(左上角偏移)
+                local modeLabel = self.gizmoMode == "move" and "移动[1]" or
+                                  self.gizmoMode == "scale" and "缩放[2]" or "旋转[3]"
+                nvgFontSize(ctx, 12 / totalZoom)
+                nvgFontFace(ctx, "sans")
+                nvgFillColor(ctx, nvgRGBA(255, 255, 255, 200))
+                nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_BOTTOM)
+                nvgText(ctx, ox + 8 / totalZoom, oy - hr - 4 / totalZoom, modeLabel)
             end
         end
     end
@@ -2482,7 +2775,7 @@ function LevelEditor:RenderEditModePanel(ctx, contentX, contentY, contentW, cont
                 nvgText(ctx, infoX, infoY, string.format("大小: %.1f", obj.size or 15))
             end
             infoY = infoY + lineH
-            nvgText(ctx, infoX, infoY, string.format("旋转: %d°", obj.angle or 0))
+            nvgText(ctx, infoX, infoY, string.format("旋转: %.0f°", obj.angle or 0))
         end
     elseif self.editSelected.type == "comfort" then
         local zones = self:GetComfortZones()
@@ -2682,14 +2975,12 @@ function LevelEditor:ImportSeedCode(code)
     self.lastGenerateSeed = seed
     local T = self.tileMap.TERRAIN
     self.tileMap:GenerateWithBiomes(seed, {
-        [T.GRASS] = 5, [T.MUD] = 3, [T.SWAMP] = 2,
+        [T.GRASS] = 5, [T.MUD] = 3,
     }, {
         regionCount = regionCount,
         transitionWidth = transWidth,
         jitter = jitter,
     })
-    -- 后处理: 安全圈内的沼泽替换为草地
-    self:RemoveSwampInsideCircle()
     self.terrainExported = true
     self.seedCode = code
 

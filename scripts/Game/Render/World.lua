@@ -13,6 +13,68 @@ M.drawPlayerDST = nil  -- 来自 Render/Player
 M.drawComfortZones = nil  -- 来自 Render/ComfortZone
 
 -- ============================================================================
+-- 获取物件的贴图变体号
+-- ============================================================================
+local function getObjVariant(obj)
+    if obj.variant then return obj.variant end
+    -- tree/rock 通过 seed 推算: variant = floor(seed / 50000) + 1
+    if obj.seed then
+        return math.floor(obj.seed / 50000) + 1
+    end
+    return 1
+end
+
+-- ============================================================================
+-- 绘制带贴图的物件(树/石头/花/植物)
+-- ============================================================================
+function M.drawDecoSprite(ctx, obj, ox, oy)
+    local objAssetImages = State.objAssetImages
+    if not objAssetImages then return end
+
+    local variant = getObjVariant(obj)
+    local typeImages = objAssetImages[obj.type]
+    if not typeImages then return end
+    local imgHandle = typeImages[variant]
+    if not imgHandle or imgHandle == 0 then return end
+
+    local sx = obj.x + ox
+    local sy = obj.y + oy
+
+    -- 根据物件类型确定绘制尺寸
+    local drawSize
+    if obj.type == "tree" then
+        drawSize = (obj.height or 100) * 1.0
+    else
+        drawSize = (obj.size or 30) * 2.0
+    end
+
+    -- 绘制贴图(居中, 底部对齐)
+    local drawW = drawSize
+    local drawH = drawSize
+    local drawX = sx - drawW / 2
+    local drawY = sy - drawH  -- 底部对齐到 y 坐标
+
+    -- 支持水平翻转
+    if obj.flipX then
+        nvgSave(ctx)
+        -- 以物件中心X为轴翻转: 先平移到中心, 再scale(-1,1), 再平移回去
+        nvgTranslate(ctx, sx, 0)
+        nvgScale(ctx, -1, 1)
+        nvgTranslate(ctx, -sx, 0)
+    end
+
+    local imgPat = nvgImagePattern(ctx, drawX, drawY, drawW, drawH, 0, imgHandle, 1.0)
+    nvgBeginPath(ctx)
+    nvgRect(ctx, drawX, drawY, drawW, drawH)
+    nvgFillPaint(ctx, imgPat)
+    nvgFill(ctx)
+
+    if obj.flipX then
+        nvgRestore(ctx)
+    end
+end
+
+-- ============================================================================
 -- 绘制地面药剂(发光瓶子)
 -- ============================================================================
 function M.drawGroundPotion(ctx, gp, ox, oy)
@@ -163,6 +225,9 @@ function M.drawEnvironmentAndPlayers(worldW, worldH, ox, oy)
         if item.type == "deco" then
             if item.data.type == "deadtree" then
                 M.drawDeadTreeDST(ctx, item.data, ox, oy)
+            elseif item.data.type == "tree" or item.data.type == "rock"
+                or item.data.type == "flower" or item.data.type == "plant" then
+                M.drawDecoSprite(ctx, item.data, ox, oy)
             end
         elseif item.type == "groundPotion" then
             M.drawGroundPotion(ctx, item.data, ox, oy)
